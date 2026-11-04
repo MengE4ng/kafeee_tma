@@ -174,34 +174,42 @@ button:focus-visible, textarea:focus-visible { outline: 3px solid var(--mustard)
    folded corner, merchant name, bold amount + currency, dashed divider, QR with
    currency mark in the centre. Sizes scale with the card (cqw) so proportions hold. */
 .khqr-stage { width: 100%; max-width: 300px; container-type: inline-size; animation: cardIn .55s var(--pop) both; }
+/* KHQR card: proportions measured from the official Bakong KHQR card (width = 100cqw, height = 145cqw) */
 .khqr { position: relative; width: 100%; aspect-ratio: 20 / 29; background: #fff; color: #000;
-  border-radius: 6.5cqw; overflow: hidden; box-shadow: 0 0 6cqw rgba(0,0,0,.12), 0 1px 3px rgba(0,0,0,.08);
-  font-family: 'Nunito Sans', 'Nunito', -apple-system, sans-serif; display: flex; flex-direction: column; }
+  border-radius: 6.2cqw; overflow: hidden; box-shadow: 0 0 6cqw rgba(0,0,0,.12), 0 1px 3px rgba(0,0,0,.08);
+  font-family: 'Nunito Sans', 'Nunito', -apple-system, sans-serif; }
 @keyframes cardIn { from { transform: translateY(30px) rotate(-4deg) scale(.92); opacity: 0; } }
-.khqr-top { position: relative; flex: none; height: 12%; background: var(--khqr-red);
+.khqr-top { position: absolute; left: 0; right: 0; top: 0; height: 17.6cqw; background: var(--khqr-red);
   display: grid; place-items: center; }
 .khqr-top::after { content: ''; position: absolute; right: 0; top: 100%;
-  border-left: 8cqw solid transparent; border-top: 8cqw solid var(--khqr-red); }
-.khqr-top img { height: 40%; width: auto; display: block; }
-.khqr-top .khqr-word { color: #fff; font: 800 7.5cqw/1 'Nunito Sans', 'Nunito', sans-serif; letter-spacing: .3cqw; }
-.khqr-info { padding: 7cqw 10cqw 0; }
-.khqr-name { font-size: 4.6cqw; line-height: 1.3; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.khqr-amount { margin-top: 1cqw; font-size: 9.5cqw; line-height: 1.1; font-weight: 800; font-variant-numeric: tabular-nums; }
-.khqr-amount small { font-size: 4.6cqw; font-weight: 400; margin-left: 1.5cqw; }
-.khqr-sep { margin: 6.5cqw 0 0; border-top: .6cqw dashed rgba(0,0,0,.45); }
-.khqr-qr { flex: 1; display: grid; place-items: center; padding: 6cqw 10cqw 9cqw; }
+  border-left: 9.7cqw solid transparent; border-top: 10.2cqw solid var(--khqr-red); }
+.khqr-top img { height: 6cqw; width: auto; display: block; }
+.khqr-top .khqr-word { color: #fff; font: 800 7cqw/1 'Nunito Sans', 'Nunito', sans-serif; letter-spacing: .3cqw; }
+.khqr-info { position: absolute; left: 14.5cqw; right: 14.5cqw; top: 0; }
+.khqr-name { position: absolute; left: 0; right: 0; top: 25.9cqw; font-size: 5.3cqw; line-height: 1; font-weight: 400;
+  letter-spacing: .02em; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.khqr-amount { position: absolute; left: 0; top: 33.9cqw; font-size: 8.4cqw; line-height: 1; font-weight: 800;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.khqr-amount small { position: relative; top: -0.4cqw; margin-left: 2.2cqw; font-size: 4.8cqw; font-weight: 400; letter-spacing: .02em; }
+.khqr-sep { position: absolute; left: 0; right: 0; top: 49.5cqw; height: .4cqw;
+  background: repeating-linear-gradient(90deg, #9b9b9b 0 1.8cqw, transparent 1.8cqw 2.9cqw); }
+.khqr-qr { position: absolute; left: 14.5cqw; top: 61.3cqw; width: 70.9cqw; }
 .khqr-qr .q { position: relative; width: 100%; aspect-ratio: 1; }
 .khqr-qr img.code { display: block; width: 100%; height: 100%; image-rendering: pixelated; transition: opacity .3s, filter .3s; }
-.khqr-qr .mark { position: absolute; left: 50%; top: 50%; width: 15%; aspect-ratio: 1; transform: translate(-50%, -50%);
-  border-radius: 50%; background: #000; color: #fff; box-shadow: 0 0 0 1.4cqw #fff;
-  display: grid; place-items: center; font: 800 6.5cqw/1 'Nunito Sans', 'Nunito', 'Noto Sans Khmer', sans-serif; }
+.khqr-qr .mark { position: absolute; left: 50%; top: 50%; width: 19.5%; aspect-ratio: 1; transform: translate(-50%, -50%);
+  border-radius: 50%; background: #000; color: #fff; box-shadow: 0 0 0 1.2cqw #fff;
+  display: grid; place-items: center; font: 800 7cqw/1 'Nunito Sans', 'Nunito', 'Noto Sans Khmer', sans-serif; }
+.khqr-qr .mark img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; object-fit: contain; }
+/* with the official emblem (it has its own white ring), drop the black circle and the $ */
+.khqr-qr .mark:has(img) { width: 22.5%; background: transparent; box-shadow: none; color: transparent; }
 .khqr.expired img.code, .khqr.expired .mark { opacity: .12; filter: blur(2px); }
-.khqr-expired-label { position: absolute; left: 0; right: 0; bottom: 34%; text-align: center; font-weight: 800;
+.khqr-expired-label { position: absolute; left: 0; right: 0; top: 92cqw; text-align: center; font-weight: 800;
   font-size: 5cqw; color: var(--khqr-red); display: none; }
 .khqr.expired .khqr-expired-label { display: block; }
-/* manual payment (your own static merchant QR) */
-.khqr.static .khqr-info { text-align: center; padding-top: 8cqw; }
-.khqr.static .khqr-name { font-size: 5cqw; letter-spacing: .2cqw; }
+/* static QR (no amount): name centered, QR moves up */
+.khqr.static .khqr-name { text-align: center; }
+.khqr.static .khqr-sep { top: 40cqw; }
+.khqr.static .khqr-qr { top: 57cqw; }
 .pay-amount { text-align: center; margin: 4px 0 16px; }
 .pay-amount .lbl { font: 20px var(--display); color: var(--espresso); letter-spacing: .5px; }
 .pay-amount .big { display: inline-flex; align-items: baseline; gap: 10px; font: 68px/1 var(--display); color: var(--mustard);

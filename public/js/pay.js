@@ -1,5 +1,46 @@
 // Pay screens (Bakong KHQR and your own merchant QR), cancel, polling
 // ---------- Pay ----------
+// "Share or save QR": opens the phone's share sheet with the KHQR card image, so the customer can
+// send it to their banking app (if it accepts images) or save it to photos. The image is loaded in
+// advance because phones only allow the share sheet right after a tap.
+function setupSaveQr(o) {
+  const btn = $('#saveQr');
+  if (!btn) return;
+  const url = location.origin + (o.cardUrl || o.qrUrl); // full KHQR card, not just the code
+  const name = `KHQR-kafee-${o.id}.png`;
+  let file = null;
+  if (navigator.canShare) {
+    fetch(url).then((r) => r.blob()).then((b) => {
+      const f = new File([b], name, { type: 'image/png' });
+      if (navigator.canShare({ files: [f] })) file = f;
+    }).catch(() => {});
+  }
+  const download = () => {
+    if (tg?.isVersionAtLeast?.('8.0')) tg.downloadFile({ url, file_name: name });
+    else if (tg) tg.openLink(url);
+    else window.open(url);
+  };
+  btn.onclick = async () => {
+    haptic('light');
+    if (file) {
+      try {
+        await navigator.share({ files: [file], title: 'KHQR payment', text: `Pay ${o.total} to ${o.merchant}` });
+        toast('After paying, come back and tap “I’ve paid”.');
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return; // customer closed the share sheet
+      }
+    }
+    // Android Telegram can't open the share sheet: open a share page in the phone's browser instead
+    if (tg && tg.platform === 'android' && o.shareUrl) {
+      tg.openLink(location.origin + o.shareUrl);
+      toast('Tap “Share to my banking app” on the next screen.');
+      return;
+    }
+    download(); // no share sheet available: save the image instead
+  };
+}
+
 function renderPay() {
   if (state.order.mode === 'manual') return renderManualPay();
   const o = state.order;
@@ -10,7 +51,7 @@ function renderPay() {
       <div class="khqr-stage">
         <div class="khqr" id="khqr" role="img" aria-label="KHQR: pay ${esc(o.total)} to ${esc(o.merchant)}">
           <div class="khqr-top">
-            <img src="/khqr-logo.svg" alt="KHQR" onerror="this.outerHTML='<span class=&quot;khqr-word&quot;>KHQR</span>'" />
+            <img src="/khqr-logo.svg" alt="KHQR" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-logo.png'; } else { this.outerHTML = '<span class=&quot;khqr-word&quot;>KHQR</span>'; }" />
           </div>
           <div class="khqr-info">
             <div class="khqr-name">${esc(o.merchant)}</div>
@@ -19,7 +60,7 @@ function renderPay() {
           <div class="khqr-sep"></div>
           <div class="khqr-qr"><div class="q">
             <img class="code" src="${o.qrUrl}" alt="" />
-            <span class="mark" aria-hidden="true">${o.currency === 'USD' ? '$' : '៛'}</span>
+            <span class="mark" aria-hidden="true">${o.currency === 'USD' ? '$' : '៛'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
           </div></div>
           <div class="khqr-expired-label">QR expired</div>
         </div>
@@ -28,20 +69,15 @@ function renderPay() {
       <div class="waiting" id="waiting"><img src="/logo-small.webp" alt="" />Waiting for your payment…</div>
       <div class="pay-actions" id="actions">
         ${o.deeplink ? `<button class="btn primary" id="openBank">Open my banking app</button>` : ''}
-        <button class="btn ${o.deeplink ? '' : 'primary'}" id="saveQr">Save QR to photos</button>
+        <button class="btn ${o.deeplink ? '' : 'primary'}" id="saveQr">Share or save QR</button>
         <button class="btn ghost" id="cancel">Cancel order</button>
       </div>
-      <p class="hint">Paying from this phone? Save the QR, then choose “scan from gallery” in ABA, ACLEDA, Wing or any Bakong app.</p>
+      <p class="hint">Paying from this phone? Tap “Share or save QR” and pick your banking app, or save it and choose “scan from gallery”.</p>
       <button class="help-link" id="help">Paid but stuck? Get help</button>
     </div>`;
 
   $('#openBank')?.addEventListener('click', () => tg ? tg.openLink(o.deeplink) : window.open(o.deeplink));
-  $('#saveQr').onclick = () => {
-    const url = location.origin + (o.cardUrl || o.qrUrl); // full KHQR card, not just the code
-    if (tg?.isVersionAtLeast?.('8.0')) tg.downloadFile({ url, file_name: `KHQR-kafee-${o.id}.png` });
-    else if (tg) tg.openLink(url);
-    else window.open(url);
-  };
+  setupSaveQr(o);
   $('#cancel').onclick = () => cancelOrder('Cancel this order? Don’t cancel if you’ve already paid.');
   $('#help').onclick = () => openSupport(o);
 
@@ -91,26 +127,26 @@ function renderManualPay() {
       <div class="khqr-stage">
         <div class="khqr ${o.amountInQr ? '' : 'static'}" id="khqr" role="img" aria-label="KHQR for ${esc(o.merchant)}">
           <div class="khqr-top">
-            <img src="/khqr-logo.svg" alt="KHQR" onerror="this.outerHTML='<span class=&quot;khqr-word&quot;>KHQR</span>'" />
+            <img src="/khqr-logo.svg" alt="KHQR" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-logo.png'; } else { this.outerHTML = '<span class=&quot;khqr-word&quot;>KHQR</span>'; }" />
           </div>
           <div class="khqr-info"><div class="khqr-name">${esc(o.merchant)}</div>${o.amountInQr ? `<div class="khqr-amount">${amountText(o)}<small>${o.currency}</small></div>` : ''}</div>
           <div class="khqr-sep"></div>
           <div class="khqr-qr"><div class="q">
             <img class="code" src="${o.qrUrl}" alt="" />
-            <span class="mark" aria-hidden="true">${o.qrCurrency === 'KHR' ? '៛' : '$'}</span>
+            <span class="mark" aria-hidden="true">${o.qrCurrency === 'KHR' ? '៛' : '$'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
           </div></div>
           <div class="khqr-expired-label">Time’s up</div>
         </div>
       </div>
       <ol class="pay-steps">
-        <li>Scan this QR, or save it and scan from gallery</li>
+        <li>Scan this QR, or tap “Share or save QR” and pick your banking app</li>
         <li>${o.amountInQr ? `Check the amount is ${esc(money)} and pay` : `Type ${esc(money)} in your bank app and pay`}</li>
         <li>Come back and tap “I’ve paid”</li>
       </ol>
       <div class="timer" id="timer"></div>
       <div class="pay-actions" id="actions">
         ${!tg ? `<button class="btn dark" id="paidBtn">I’ve paid ${esc(money)}</button>` : ''}
-        <button class="btn" id="saveQr">Save QR to photos</button>
+        <button class="btn" id="saveQr">Share or save QR</button>
         <button class="btn ghost" id="cancel">Cancel order</button>
       </div>
       <button class="help-link" id="help">Paid but stuck? Get help</button>
@@ -136,12 +172,7 @@ function renderManualPay() {
     try { await navigator.clipboard.writeText(amountText(o).replace(/,/g, '')); toast('Amount copied'); haptic('light'); }
     catch { toast(`Type ${money} in your bank app`); }
   };
-  $('#saveQr').onclick = () => {
-    const url = location.origin + (o.cardUrl || o.qrUrl); // full KHQR card, not just the code
-    if (tg?.isVersionAtLeast?.('8.0')) tg.downloadFile({ url, file_name: `KHQR-kafee-${o.id}.png` });
-    else if (tg) tg.openLink(url);
-    else window.open(url);
-  };
+  setupSaveQr(o);
   $('#cancel').onclick = () => cancelOrder('Cancel this order? Don’t cancel if you’ve already paid. Tap “I’ve paid” instead.');
 
   const tick = () => {
@@ -162,7 +193,7 @@ async function cancelOrder(question) {
   try { state.order = await api(`/api/orders/${state.order.id}/cancel`, { method: 'POST' }); }
   catch (e) { return toast(e.message); }
   if (state.order.status === 'cancelled') { toast('Order cancelled'); go('cart', 'back'); }
-  else go('status'); // the payment had already arrived
+  else { toast('This order is already paid. Here’s your pickup number.'); go('status', 'up'); } // payment had already been confirmed
 }
 
 function showExpired() {
@@ -188,7 +219,9 @@ async function pollOrder() {
     const prev = state.order.status;
     const o = await api(`/api/orders/${state.order.id}`);
     state.order = o;
-    if (state.view === 'pay' && !['pending_payment', 'expired', 'awaiting_confirmation', 'cancelled'].includes(o.status)) {
+    if (state.view === 'pay' && o.status === 'cancelled') {
+      toast('This order was cancelled.'); go('cart', 'back');
+    } else if (state.view === 'pay' && !['pending_payment', 'expired', 'awaiting_confirmation', 'cancelled'].includes(o.status)) {
       haptic('success'); state.cart = []; state.note = '';
       go('status', 'up'); celebrate();
     } else if (state.view === 'pay' && o.status !== prev && o.status === 'pending_payment') {

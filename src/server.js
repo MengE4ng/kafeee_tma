@@ -96,6 +96,7 @@ function publicOrder(o) {
       : o.md5 ? `/api/orders/${o.id}/qr.png?k=${o.md5}` : null,
     amountInQr: MODE === 'manual' && Boolean(o.qr),
     cardUrl: `/api/orders/${o.id}/card.png?k=${cardKey(o.id)}`,
+    shareUrl: `/share/${o.id}?k=${cardKey(o.id)}`,
     qrCurrency: MODE === 'manual' ? merchantQR.currency : o.currency,
     rejectedCount: o.rejected_count || 0,
     deeplink: o.deeplink,
@@ -130,8 +131,15 @@ async function attachNewQR(orderId) {
   if (MODE === 'manual') {
     if (QR_WITH_AMOUNT) {
       const o = db.getOrder(orderId);
-      const qr = addAmountToKhqr(merchantQR.qr, fromMinor(o.total));
-      db.setQR(orderId, { qr, md5: null, expiresAt: Date.now() + QR_TTL_MS, deeplink: null });
+      // A QR with an amount must carry a timestamp to be valid KHQR. We give it 24h so it still
+      // works if the barista asks the customer to try again; the app's own pay timer still applies.
+      const qr = addAmountToKhqr(merchantQR.qr, fromMinor(o.total), { expiresAt: Date.now() + 24 * 3600 * 1000 });
+      if (BakongKHQR.verify(qr).isValid) {
+        db.setQR(orderId, { qr, md5: null, expiresAt: Date.now() + QR_TTL_MS, deeplink: null });
+      } else {
+        console.warn('Could not build a valid QR with amount; showing the plain merchant QR instead.');
+        db.extendDeadline(orderId, QR_TTL_MS);
+      }
     } else {
       db.extendDeadline(orderId, QR_TTL_MS);
     }
@@ -281,7 +289,10 @@ app.post('/api/orders/:id/regenerate', auth, wrap(async (req, res) => {
 
 app.post('/api/orders/:id/cancel', auth, wrap(async (req, res) => {
   const order = ownedOrder(req);
-  if (!['pending_payment', 'expired', 'awaiting_confirmation'].includes(order.status)) throw new HttpError(409, 'Paid orders can’t be cancelled in the app. Please ask the barista.');
+  // Already cancelled (e.g. tapped twice, or cancelled on another device): just confirm it
+  if (order.status === 'cancelled') return res.json(publicOrder(order));
+  // Already paid: send the order back so the app can show the pickup number instead of an error
+  if (['pending_payment', 'expired', 'awaiting_confirmation'].includes(order.status) === false) return res.json(publicOrder(order));
   // Last check so we never cancel an order whose payment just landed
   if (MODE === 'manual' || !(await checkAndSettle(order))) db.setStatus(order.id, 'cancelled');
   res.json(publicOrder(db.getOrder(order.id)));
@@ -317,10 +328,47 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
   res.send(png);
 }));
 
+// Share page, opened in the phone's own browser (Chrome on Android), where the share sheet works.
+// Telegram's in-app window on Android can't open the share sheet, so the app sends customers here.
+app.get('/share/:id', (req, res) => {
+  const order = db.getOrder(Number(req.params.id));
+  if (!order || req.query.k !== cardKey(order.id)) return res.status(404).send('Not found');
+  const img = `/api/orders/${order.id}/card.png?k=${cardKey(order.id)}`;
+  const total = formatMoney(order.total, order.currency);
+  const file = `KHQR-kafee-${order.id}.png`;
+  res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pay ${total} · KHQR</title>
+<style>
+  body{margin:0;min-height:100vh;background:#f4ead3;font-family:-apple-system,Roboto,'Noto Sans Khmer',sans-serif;color:#1b1410;
+    display:flex;flex-direction:column;align-items:center;padding:20px 16px 32px;box-sizing:border-box}
+  img{width:100%;max-width:340px;border-radius:18px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+  .btn{display:block;width:100%;max-width:340px;margin-top:14px;padding:15px;border:2.5px solid #1b1410;border-radius:14px;
+    font-size:18px;font-weight:800;text-align:center;text-decoration:none;color:#1b1410;box-shadow:4px 4px 0 #1b1410;box-sizing:border-box}
+  .primary{background:#c9a12b}.plain{background:#fff}
+  p{max-width:340px;text-align:center;color:#6e5a46;font-size:15px;line-height:1.4}
+</style></head><body>
+<img src="${img}" alt="KHQR ${total}">
+<button class="btn primary" id="share">📲 Share to my banking app</button>
+<a class="btn plain" href="${img}" download="${file}">⬇️ Save image</a>
+<p>Pick your banking app in the share list. If it isn't there, tap “Save image”, then in your bank app choose Scan → Gallery.<br><br>After paying, go back to Telegram and tap “I’ve paid”.</p>
+<script>
+  let file = null;
+  fetch('${img}').then(r => r.blob()).then(b => { file = new File([b], '${file}', { type: 'image/png' }); });
+  document.getElementById('share').onclick = async () => {
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'KHQR payment', text: 'Pay ${total}' }); } catch (e) {}
+    } else {
+      location.href = '${img}';
+    }
+  };
+</script></body></html>`);
+});
+
 // Manual mode: your own merchant QR, rendered sharp from the KHQR string
 app.get('/api/merchant-qr.png', wrap(async (req, res) => {
   if (MODE !== 'manual') throw new HttpError(404, 'Not found');
-  const png = await QRCode.toBuffer(merchantQR.qr, { width: 720, margin: 2, errorCorrectionLevel: 'Q' });
+  const png = await QRCode.toBuffer(merchantQR.qr, { width: 720, margin: 0, errorCorrectionLevel: 'Q' });
   res.set('Content-Type', 'image/png');
   res.set('Cache-Control', 'public, max-age=86400');
   res.set('Content-Disposition', 'inline; filename="KHQR-kafee.png"');
@@ -332,7 +380,7 @@ app.get('/api/merchant-qr.png', wrap(async (req, res) => {
 app.get('/api/orders/:id/qr.png', wrap(async (req, res) => {
   const order = db.getOrder(Number(req.params.id));
   if (!order || !order.qr || (req.query.k !== order.md5 && req.query.k !== cardKey(order.id))) throw new HttpError(404, 'Not found');
-  const png = await QRCode.toBuffer(order.qr, { width: 720, margin: 2, errorCorrectionLevel: 'Q' });
+  const png = await QRCode.toBuffer(order.qr, { width: 720, margin: 0, errorCorrectionLevel: 'Q' });
   res.set('Content-Type', 'image/png');
   res.set('Content-Disposition', `inline; filename="KHQR-order-${order.id}.png"`);
   res.send(png);

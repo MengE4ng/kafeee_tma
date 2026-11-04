@@ -54,8 +54,10 @@ const unquote = (v) => v.trim().replace(/^(['"])(.*)\1$/, '$2');
     const hasEnc = lineRe(`${name}_ENC`).test(env);
     let value = plain ? unquote(plain[1].replace(/\s+#.*$/, '')) : ''; // drop "# comments" after values
 
-    if (only || (!value && !hasEnc)) {
-      value = await ask(`New value for ${name}${name === 'BOT_TOKEN' ? ' (hidden)' : ''}: `, name === 'BOT_TOKEN');
+    const optional = name === 'BARISTA_TOPIC_ID';
+    if (only || (!value && !hasEnc && optional === false)) {
+      const hidden = name === 'BOT_TOKEN';
+      value = await ask(`New value for ${name}${hidden ? ' (hidden)' : ''}: `, hidden);
     }
     if (!value) { if (hasEnc) console.log(`${name}: already encrypted, kept.`); continue; }
 

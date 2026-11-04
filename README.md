@@ -58,6 +58,16 @@ Run `node scripts/obfuscate-token.js` and paste the token when asked (it's hidde
 stored outside the project in `~/.kafee_secret.key`. Run the script on each machine (Mac, server) separately.
 This protects against screenshots / accidental sharing, not against someone who has full access to the server.
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm start` | Run the app |
+| `npm run dev` | Run the app and restart on file changes |
+| `npm run qr -- 2.25` | Make a KHQR with an amount from your merchant QR (`-- 2.25 card` for the full card image) |
+| `npm run secret:set` | Encrypt BOT_TOKEN, WEBAPP_URL, BARISTA_CHAT_ID in .env (`-- WEBAPP_URL` to change one value, `-- --all` for every line) |
+| `npm run secret:reveal` | Decrypt .env back to plain text |
+
 ## Customize
 
 - Menu, prices, options: `src/menu.js`
