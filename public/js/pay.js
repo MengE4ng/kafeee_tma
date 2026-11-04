@@ -3,6 +3,21 @@
 // "Share or save QR": opens the phone's share sheet with the KHQR card image, so the customer can
 // send it to their banking app (if it accepts images) or save it to photos. The image is loaded in
 // advance because phones only allow the share sheet right after a tap.
+// A soft "QR-shaped" placeholder: three finder squares, scattered dots, and a centre circle.
+// Built once with a fixed seed, so it looks the same every time.
+const QR_SKELETON = (() => {
+  const N = 29, cells = [];
+  let seed = 7;
+  const rand = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  const inFinder = (x, y) => (x < 8 && y < 8) || (x > N - 9 && y < 8) || (x < 8 && y > N - 9);
+  const inCentre = (x, y) => (x - 14) ** 2 + (y - 14) ** 2 < 18;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    if (!inFinder(x, y) && !inCentre(x, y) && rand() < 0.42) cells.push(`<rect x="${x + 0.12}" y="${y + 0.12}" width=".76" height=".76" rx=".22"/>`);
+  }
+  const finder = (x, y) => `<rect x="${x + 0.5}" y="${y + 0.5}" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1"/><rect x="${x + 2}" y="${y + 2}" width="3" height="3" rx=".8"/>`;
+  return `<svg viewBox="0 0 ${N} ${N}" aria-hidden="true"><g class="dots">${cells.join('')}</g><g class="finders">${finder(0, 0)}${finder(N - 7, 0)}${finder(0, N - 7)}</g><circle class="centre" cx="14.5" cy="14.5" r="3.4"/></svg>`;
+})();
+
 // QR image: shimmer skeleton while it loads, and a retry button if it fails (slow network / server waking up)
 function qrFailed(img) { img.parentNode.classList.add('failed'); }
 function qrRetry(btn) {
@@ -66,7 +81,7 @@ function renderPay() {
             <div class="khqr-amount">${o.currency === 'USD' ? o.amount.toFixed(2) : o.amount.toLocaleString('en-US')}<small>${o.currency}</small></div>
           </div>
           <div class="khqr-sep"></div>
-          <div class="khqr-qr"><div class="q loading">
+          <div class="khqr-qr"><div class="q loading"><div class="qr-skel">${QR_SKELETON}</div>
             <img class="code" src="${o.qrUrl}" alt="" onload="this.parentNode.classList.remove('loading', 'failed')" onerror="qrFailed(this)" />
             <button class="qr-retry" onclick="qrRetry(this)">Couldn’t load the QR. Tap to try again</button>
             <span class="mark" aria-hidden="true">${o.currency === 'USD' ? '$' : '៛'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
@@ -140,7 +155,7 @@ function renderManualPay() {
           </div>
           <div class="khqr-info"><div class="khqr-name">${esc(o.merchant)}</div>${o.amountInQr ? `<div class="khqr-amount">${amountText(o)}<small>${o.currency}</small></div>` : ''}</div>
           <div class="khqr-sep"></div>
-          <div class="khqr-qr"><div class="q loading">
+          <div class="khqr-qr"><div class="q loading"><div class="qr-skel">${QR_SKELETON}</div>
             <img class="code" src="${o.qrUrl}" alt="" onload="this.parentNode.classList.remove('loading', 'failed')" onerror="qrFailed(this)" />
             <button class="qr-retry" onclick="qrRetry(this)">Couldn’t load the QR. Tap to try again</button>
             <span class="mark" aria-hidden="true">${o.qrCurrency === 'KHR' ? '៛' : '$'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
