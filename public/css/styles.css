@@ -199,6 +199,22 @@ button:focus-visible, textarea:focus-visible { outline: 3px solid var(--mustard)
 .khqr-qr .mark { position: absolute; left: 50%; top: 50%; width: 19.5%; aspect-ratio: 1; transform: translate(-50%, -50%);
   border-radius: 50%; background: #000; color: #fff; box-shadow: 0 0 0 1.2cqw #fff;
   display: grid; place-items: center; font: 800 7cqw/1 'Nunito Sans', 'Nunito', 'Noto Sans Khmer', sans-serif; }
+.khqr-qr .q.loading { border-radius: 1.5cqw; overflow: hidden;
+  background: linear-gradient(100deg, #ececec 30%, #f8f8f8 50%, #ececec 70%) 0 0 / 250% 100%;
+  animation: qrShimmer 1.2s linear infinite; }
+/* faint finder squares so the skeleton reads as "QR coming" */
+.khqr-qr .q.loading::before { content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(#dcdcdc, #dcdcdc) 0 0 / 22% 22% no-repeat,
+    linear-gradient(#dcdcdc, #dcdcdc) 100% 0 / 22% 22% no-repeat,
+    linear-gradient(#dcdcdc, #dcdcdc) 0 100% / 22% 22% no-repeat; border-radius: 1cqw; }
+@keyframes qrShimmer { from { background-position: 125% 0; } to { background-position: -125% 0; } }
+.khqr-qr .q.loading img.code, .khqr-qr .q.loading .mark, .khqr-qr .q.failed .mark { opacity: 0; }
+.khqr-qr .q img.code { transition: opacity .35s; }
+.khqr-qr .qr-retry { display: none; position: absolute; inset: 0; z-index: 2; padding: 10cqw; border-radius: 1.5cqw;
+  background: #f4f4f4; color: #555; font: 700 4.4cqw/1.35 'Nunito Sans', 'Nunito', sans-serif; text-align: center; }
+.khqr-qr .q.failed .qr-retry { display: grid; place-items: center; }
+.khqr-qr .q.failed { animation: none; }
 .khqr-qr .mark img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; object-fit: contain; }
 /* with the official emblem (it has its own white ring), drop the black circle and the $ */
 .khqr-qr .mark:has(img) { width: 22.5%; background: transparent; box-shadow: none; color: transparent; }

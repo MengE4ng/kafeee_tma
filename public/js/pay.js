@@ -3,6 +3,14 @@
 // "Share or save QR": opens the phone's share sheet with the KHQR card image, so the customer can
 // send it to their banking app (if it accepts images) or save it to photos. The image is loaded in
 // advance because phones only allow the share sheet right after a tap.
+// QR image: shimmer skeleton while it loads, and a retry button if it fails (slow network / server waking up)
+function qrFailed(img) { img.parentNode.classList.add('failed'); }
+function qrRetry(btn) {
+  const q = btn.parentNode, img = q.querySelector('img.code');
+  q.classList.remove('failed'); q.classList.add('loading');
+  img.src = img.src.replace(/([?&])r=\d+/, '').replace(/$/, (img.src.includes('?') ? '&' : '?') + 'r=' + Date.now());
+}
+
 function setupSaveQr(o) {
   const btn = $('#saveQr');
   if (!btn) return;
@@ -58,8 +66,9 @@ function renderPay() {
             <div class="khqr-amount">${o.currency === 'USD' ? o.amount.toFixed(2) : o.amount.toLocaleString('en-US')}<small>${o.currency}</small></div>
           </div>
           <div class="khqr-sep"></div>
-          <div class="khqr-qr"><div class="q">
-            <img class="code" src="${o.qrUrl}" alt="" />
+          <div class="khqr-qr"><div class="q loading">
+            <img class="code" src="${o.qrUrl}" alt="" onload="this.parentNode.classList.remove('loading', 'failed')" onerror="qrFailed(this)" />
+            <button class="qr-retry" onclick="qrRetry(this)">Couldn’t load the QR. Tap to try again</button>
             <span class="mark" aria-hidden="true">${o.currency === 'USD' ? '$' : '៛'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
           </div></div>
           <div class="khqr-expired-label">QR expired</div>
@@ -131,8 +140,9 @@ function renderManualPay() {
           </div>
           <div class="khqr-info"><div class="khqr-name">${esc(o.merchant)}</div>${o.amountInQr ? `<div class="khqr-amount">${amountText(o)}<small>${o.currency}</small></div>` : ''}</div>
           <div class="khqr-sep"></div>
-          <div class="khqr-qr"><div class="q">
-            <img class="code" src="${o.qrUrl}" alt="" />
+          <div class="khqr-qr"><div class="q loading">
+            <img class="code" src="${o.qrUrl}" alt="" onload="this.parentNode.classList.remove('loading', 'failed')" onerror="qrFailed(this)" />
+            <button class="qr-retry" onclick="qrRetry(this)">Couldn’t load the QR. Tap to try again</button>
             <span class="mark" aria-hidden="true">${o.qrCurrency === 'KHR' ? '៛' : '$'}<img src="/khqr-center.svg" alt="" onerror="if (this.src.endsWith('.svg')) { this.src = '/khqr-center.png'; } else { this.remove(); }" /></span>
           </div></div>
           <div class="khqr-expired-label">Time’s up</div>
