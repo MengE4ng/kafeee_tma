@@ -51,6 +51,13 @@ Set `PAYMENT_MODE` in `.env`:
 | `/menu` | List items with their IDs and stock status |
 | `/soldout latte`, `/restock latte` | Mark an item sold out / back |
 
+## Hiding the bot token in .env
+
+Run `node scripts/obfuscate-token.js` and paste the token when asked (it's hidden while you type).
+`.env` then contains `BOT_TOKEN_ENC=v1....` (unreadable) instead of `BOT_TOKEN=...`. The decryption key is
+stored outside the project in `~/.kafee_secret.key`. Run the script on each machine (Mac, server) separately.
+This protects against screenshots / accidental sharing, not against someone who has full access to the server.
+
 ## Customize
 
 - Menu, prices, options: `src/menu.js`
@@ -84,6 +91,16 @@ src/bot.js           Barista notifications, status buttons, commands
 src/db.js            SQLite storage (Node built-in, no compiling needed)
 src/telegramAuth.js  Verifies Telegram initData so orders can't be faked
 src/menu.js          Your menu
-public/index.html    The mini app (menu, cart, KHQR screen, pickup ticket)
+public/index.html    The mini app page (just the layout; loads the files below)
+public/css/styles.css  All styles
+public/js/core.js      Telegram setup, helpers, API calls, Telegram buttons
+public/js/cart.js      Cart helpers (prices, options, totals)
+public/js/router.js    Switching screens with transitions
+public/js/menu.js      Menu screen and drink sheet
+public/js/checkout.js  Cart screen and placing the order
+public/js/pay.js       Pay screens, cancel, payment polling
+public/js/status.js    Pickup ticket / order status
+public/js/shop.js      Find us card, contact buttons, Need help? panel
+public/js/main.js      Start-up
 public/logo.webp     Kafee logo (transparent background); logo-small.webp for icons
 ```

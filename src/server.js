@@ -10,7 +10,10 @@ const db = require('./db');
 const menu = require('./menu');
 const shop = require('./shop');
 const { BakongKHQR } = require('bakong-khqr');
-const { generateKHQR, checkPaymentByMd5, generateDeepLink } = require('./khqr');
+const { generateKHQR, checkPaymentByMd5, generateDeepLink, addAmountToKhqr } = require('./khqr');
+// Manual mode: put each order's amount into your merchant QR, so customers don't type it.
+// Set QR_WITH_AMOUNT=0 in .env to go back to the plain QR where customers type the amount.
+const QR_WITH_AMOUNT = process.env.QR_WITH_AMOUNT !== '0';
 const { validateInitData } = require('./telegramAuth');
 const { createBot } = require('./bot');
 
@@ -88,7 +91,10 @@ function publicOrder(o) {
     amount: fromMinor(o.total),
     currency: o.currency,
     mode: MODE,
-    qrUrl: MODE === 'manual' ? '/api/merchant-qr.png' : o.md5 ? `/api/orders/${o.id}/qr.png?k=${o.md5}` : null,
+    qrUrl: MODE === 'manual'
+      ? (o.qr ? `/api/orders/${o.id}/qr.png?k=${cardKey(o.id)}` : '/api/merchant-qr.png')
+      : o.md5 ? `/api/orders/${o.id}/qr.png?k=${o.md5}` : null,
+    amountInQr: MODE === 'manual' && Boolean(o.qr),
     cardUrl: `/api/orders/${o.id}/card.png?k=${cardKey(o.id)}`,
     qrCurrency: MODE === 'manual' ? merchantQR.currency : o.currency,
     rejectedCount: o.rejected_count || 0,
@@ -121,7 +127,16 @@ function priceLine(line) {
 }
 
 async function attachNewQR(orderId) {
-  if (MODE === 'manual') { db.extendDeadline(orderId, QR_TTL_MS); return db.getOrder(orderId); }
+  if (MODE === 'manual') {
+    if (QR_WITH_AMOUNT) {
+      const o = db.getOrder(orderId);
+      const qr = addAmountToKhqr(merchantQR.qr, fromMinor(o.total));
+      db.setQR(orderId, { qr, md5: null, expiresAt: Date.now() + QR_TTL_MS, deeplink: null });
+    } else {
+      db.extendDeadline(orderId, QR_TTL_MS);
+    }
+    return db.getOrder(orderId);
+  }
   const order = db.getOrder(orderId);
   const expiresAt = Date.now() + QR_TTL_MS;
   const { qr, md5 } = generateKHQR({
@@ -282,7 +297,7 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
   const order = db.getOrder(Number(req.params.id));
   if (!order || req.query.k !== cardKey(order.id)) throw new HttpError(404, 'Not found');
   const manual = MODE === 'manual';
-  const qr = manual ? merchantQR.qr : order.qr;
+  const qr = manual ? (order.qr || merchantQR.qr) : order.qr;
   if (!qr) throw new HttpError(404, 'Not found');
   const cacheKey = `${order.id}:${order.md5 || 'manual'}`;
   let png = cardCache.get(cacheKey);
@@ -292,7 +307,7 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
       merchant: manual ? merchantQR.name : (process.env.MERCHANT_NAME || SHOP_NAME),
       amount: fromMinor(order.total),
       currency: manual ? merchantQR.currency : order.currency,
-      fixedAmount: !manual,
+      fixedAmount: !manual || Boolean(order.qr),
     });
     cardCache.set(cacheKey, png);
     if (cardCache.size > 100) cardCache.delete(cardCache.keys().next().value);
@@ -316,7 +331,7 @@ app.get('/api/merchant-qr.png', wrap(async (req, res) => {
 // The md5 in the query acts as an unguessable key, since downloads can't send auth headers.
 app.get('/api/orders/:id/qr.png', wrap(async (req, res) => {
   const order = db.getOrder(Number(req.params.id));
-  if (!order || !order.qr || order.md5 !== req.query.k) throw new HttpError(404, 'Not found');
+  if (!order || !order.qr || (req.query.k !== order.md5 && req.query.k !== cardKey(order.id))) throw new HttpError(404, 'Not found');
   const png = await QRCode.toBuffer(order.qr, { width: 720, margin: 2, errorCorrectionLevel: 'Q' });
   res.set('Content-Type', 'image/png');
   res.set('Content-Disposition', `inline; filename="KHQR-order-${order.id}.png"`);

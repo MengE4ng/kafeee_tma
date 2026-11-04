@@ -69,3 +69,43 @@ async function generateDeepLink(qr) {
 }
 
 module.exports = { generateKHQR, checkPaymentByMd5, generateDeepLink };
+
+// ---- Put an amount into an existing (static) merchant KHQR ----
+// KHQR is a list of fields: 2-digit tag + 2-digit length + value. We keep every field of
+// your merchant QR as-is (including ABA PayWay's data), then:
+//   01 → "12" (dynamic QR), 54 → amount, 99 → created/expires timestamps, 63 → new checksum.
+function parseTlv(s) {
+  const out = [];
+  for (let i = 0; i < s.length;) {
+    const tag = s.slice(i, i + 2), len = Number(s.slice(i + 2, i + 4));
+    if (!/^\d{2}$/.test(tag) || Number.isNaN(len)) throw new Error('Not a valid KHQR string');
+    out.push([tag, s.slice(i + 4, i + 4 + len)]);
+    i += 4 + len;
+  }
+  return out;
+}
+const tlv = (tag, value) => tag + String(value.length).padStart(2, '0') + value;
+
+function crc16(str) { // CRC-16/CCITT-FALSE, as used by EMV / KHQR
+  let crc = 0xffff;
+  for (const b of Buffer.from(str, 'utf8')) {
+    crc ^= b << 8;
+    for (let j = 0; j < 8; j++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function addAmountToKhqr(qr, amount, { expiresAt } = {}) {
+  const fields = parseTlv(qr.trim()).filter(([t]) => !['54', '63', '99'].includes(t));
+  const currency = fields.find(([t]) => t === '53')?.[1];
+  const value = currency === '116' ? String(Math.round(amount)) : (Math.round(amount * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
+  const set = (tag, v) => { const f = fields.find(([t]) => t === tag); if (f) f[1] = v; else fields.push([tag, v]); };
+  set('01', '12');
+  set('54', value);
+  if (expiresAt) set('99', tlv('00', String(Date.now())) + tlv('01', String(expiresAt)));
+  fields.sort(([a], [b]) => Number(a) - Number(b));
+  const body = fields.map(([t, v]) => tlv(t, v)).join('') + '6304';
+  return body + crc16(body);
+}
+
+module.exports.addAmountToKhqr = addAmountToKhqr;
