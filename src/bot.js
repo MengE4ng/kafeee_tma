@@ -1,6 +1,7 @@
-const { Bot, InlineKeyboard } = require('grammy');
+const { Bot, InlineKeyboard, InputFile } = require('grammy');
 const db = require('./db');
-const menu = require('./menu');
+const menuStore = require('./menuStore');
+const admins = require('./admins');
 
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
@@ -78,22 +79,40 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
       return `<b>${it.qty}×</b> ${esc(it.name)}${opts ? ` <i>(${esc(opts)})</i>` : ''}`;
     }).join('\n');
   }
-  async function notifyBaristaClaim(o) {
+  // proof = { photo: Buffer } when the customer attached a screenshot just now
+  async function notifyBaristaClaim(o, proof = {}) {
     const who = o.username ? `${esc(o.user_name)} (@${esc(o.username)})` : esc(o.user_name);
+    const strikes = db.recentRejections(o.user_id);
     const text = [
       `💰 <b>CHECK PAYMENT: ${formatMoney(o.total, o.currency)}</b>`,
       `👤 ${who} says they paid.`,
+      o.claim_ref ? `🧾 Transaction ID: <code>${esc(o.claim_ref)}</code>` : null,
+      proof.photo || o.claim_photo ? '📷 Payment screenshot attached' : null,
       o.rejected_count ? `<i>(attempt ${o.rejected_count + 1})</i>` : null,
+      strikes ? `⚠️ <b>${strikes} unconfirmed payment(s)</b> from this customer in the last 24h` : null,
       '',
       itemsText(o),
       o.note ? `\n📝 ${esc(o.note)}` : null,
       '',
-      'Check your ABA app for this amount, then tap a button.',
-    ].filter((l) => l !== null).join('\n');
+      'Check your ABA app for this amount (and transaction ID), then tap a button.',
+    ].filter((l) => l !== null).join('\n').slice(0, 1000);
     const kb = new InlineKeyboard().text('✅ Payment received', `pay:${o.id}:ok`).text('❌ Not received', `pay:${o.id}:no`);
-    const msg = await bot.api.sendMessage(baristaChatId, text, { ...topic, parse_mode: 'HTML', reply_markup: kb });
+    const opts = { ...topic, parse_mode: 'HTML', reply_markup: kb };
+    let msg;
+    if (proof.photo) {
+      msg = await bot.api.sendPhoto(baristaChatId, new InputFile(proof.photo, 'payment.jpg'), { ...opts, caption: text });
+      db.setClaimProof(o.id, null, msg.photo?.at(-1)?.file_id);
+    } else if (o.claim_photo) {
+      msg = await bot.api.sendPhoto(baristaChatId, o.claim_photo, { ...opts, caption: text }); // e.g. resent by /pending
+    } else {
+      msg = await bot.api.sendMessage(baristaChatId, text, opts);
+    }
     db.setBaristaMsg(o.id, msg.message_id);
   }
+  // the check message may be a photo (caption) or plain text
+  const editCheck = (ctx, text, extra = {}) => (ctx.callbackQuery?.message?.photo
+    ? ctx.editMessageCaption({ caption: text.slice(0, 1020), ...extra })
+    : ctx.editMessageText(text, extra));
 
   async function messageCustomer(userId, text) {
     try { await bot.api.sendMessage(userId, text, { parse_mode: 'HTML' }); }
@@ -134,6 +153,28 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
   bot.command('start', (ctx) =>
     ctx.reply('Welcome! Tap below to see the menu and order ahead. 🧋', { reply_markup: openAppKeyboard() }));
 
+  // Your own Telegram user ID, for ADMIN_IDS (who can edit the menu in the app)
+  bot.command('myid', (ctx) => ctx.reply(`Your Telegram ID: <code>${ctx.from.id}</code>\nPut it in ADMIN_IDS to manage the menu in the app.`, { parse_mode: 'HTML' }));
+
+  // Menu managers. Only owners (ADMIN_IDS) can add or remove them; works in any chat with the bot.
+  bot.command('addadmin', async (ctx) => {
+    if (admins.isOwner(ctx.from) === false) return ctx.reply('Only the shop owner (listed in ADMIN_IDS) can add menu managers.');
+    const who = ctx.match.trim();
+    const added = who && admins.addManager(who);
+    if (!added) return ctx.reply('Send: /addadmin @username  (or their Telegram ID)');
+    await ctx.reply(`✅ ${esc(added)} can now manage the menu.\nThey should fully close and reopen the mini app to see ⚙ Manage menu.`, { parse_mode: 'HTML' });
+  });
+  bot.command('removeadmin', async (ctx) => {
+    if (admins.isOwner(ctx.from) === false) return ctx.reply('Only the shop owner (listed in ADMIN_IDS) can remove menu managers.');
+    const removed = admins.removeManager(ctx.match.trim());
+    await ctx.reply(removed ? `Removed ${esc(removed)}.` : 'Not found. Send /admins to see the list.', { parse_mode: 'HTML' });
+  });
+  bot.command('admins', async (ctx) => {
+    if (admins.isOwner(ctx.from) === false) return ctx.reply('Only the shop owner can see this.');
+    const o = admins.owners(), m = admins.managers();
+    await ctx.reply(`👑 Owners (ADMIN_IDS): ${o.map(esc).join(', ') || 'none'}\n🧑‍🍳 Menu managers: ${m.map(esc).join(', ') || 'none'}\n\nAdd: /addadmin @username\nRemove: /removeadmin @username`, { parse_mode: 'HTML' });
+  });
+
   // Handy during setup: tells you the chat ID to put in BARISTA_CHAT_ID
   bot.command('chatid', (ctx) => {
     const t = ctx.msg.is_topic_message ? ctx.msg.message_thread_id : null;
@@ -164,6 +205,7 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
   bot.command('menu', async (ctx) => {
     if (!isBaristaChat(ctx)) return;
     const so = db.soldOut();
+    const menu = menuStore.getMenu();
     const list = menu.items.map((i) => `${so.has(i.id) ? '❌' : '✅'} ${esc(i.name)} — <code>${i.id}</code>`).join('\n');
     await ctx.reply(`${list}\n\n/soldout &lt;id&gt; or /restock &lt;id&gt;`, { parse_mode: 'HTML' });
   });
@@ -171,7 +213,7 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
     bot.command(cmd, async (ctx) => {
       if (!isBaristaChat(ctx)) return;
       const id = ctx.match.trim();
-      const item = menu.items.find((i) => i.id === id);
+      const item = menuStore.getMenu().items.find((i) => i.id === id);
       if (!item) return ctx.reply('Unknown item. Send /menu to see IDs.');
       db.setSoldOut(id, value);
       await ctx.reply(value ? `❌ ${item.name} marked sold out` : `✅ ${item.name} is back`);
@@ -190,7 +232,7 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
     db.setStatus(order.id, next);
     const updated = db.getOrder(order.id);
     const by = ctx.from.first_name;
-    await ctx.editMessageText(`${baristaText(updated)}\n<i>by ${esc(by)}</i>`, {
+    await editCheck(ctx, `${baristaText(updated)}\n<i>by ${esc(by)}</i>`, {
       parse_mode: 'HTML',
       reply_markup: baristaKeyboard(updated),
     });
@@ -208,12 +250,12 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
     if (answer === 'ok') {
       db.markPaid(order.id, { hash: null, fromAccountId: `confirmed by ${by}`, amountOk: true });
       const paid = db.getOrder(order.id);
-      await ctx.editMessageText(`🆕 ${baristaText(paid)}`, { parse_mode: 'HTML', reply_markup: baristaKeyboard(paid) });
+      await editCheck(ctx, `🆕 ${baristaText(paid)}`, { parse_mode: 'HTML', reply_markup: baristaKeyboard(paid) });
       await ctx.answerCallbackQuery(`Order #${paid.code}`);
       await notifyCustomer(paid);
     } else {
       db.rejectPayment(order.id, manualTtlMs);
-      await ctx.editMessageText(
+      await editCheck(ctx,
         `❌ Payment of ${formatMoney(order.total, order.currency)} from ${esc(order.user_name)} <b>not received</b>\n<i>marked by ${esc(by)}. The customer was asked to check and try again.</i>`,
         { parse_mode: 'HTML' });
       await ctx.answerCallbackQuery('Customer notified');
@@ -224,7 +266,17 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
 
   bot.catch((err) => console.error('Bot error:', err.error));
 
-  return { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer };
+  // Customer went back to the QR: update the barista's check message so nobody confirms it by mistake
+  async function notifyClaimWithdrawn(o, wasPhoto) {
+    if (!o.barista_msg_id) return;
+    const text = `↩️ ${esc(o.user_name)} went back to pay ${formatMoney(o.total, o.currency)}. <b>No action needed.</b>\n<i>A new payment check will arrive when they tap “I’ve paid” again.</i>`;
+    const call = wasPhoto
+      ? bot.api.editMessageCaption(baristaChatId, o.barista_msg_id, { caption: text, parse_mode: 'HTML' })
+      : bot.api.editMessageText(baristaChatId, o.barista_msg_id, text, { parse_mode: 'HTML' });
+    await call.catch((e) => console.warn('Could not update the payment check message:', e.description || e.message));
+  }
+
+  return { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer, notifyClaimWithdrawn };
 }
 
 module.exports = { createBot };
