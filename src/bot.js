@@ -1,6 +1,6 @@
 const { Bot, InlineKeyboard } = require('grammy');
 const db = require('./db');
-const menu = require('./menu');
+const menuStore = require('./menuStore');
 
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
@@ -134,6 +134,9 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
   bot.command('start', (ctx) =>
     ctx.reply('Welcome! Tap below to see the menu and order ahead. 🧋', { reply_markup: openAppKeyboard() }));
 
+  // Your own Telegram user ID, for ADMIN_IDS (who can edit the menu in the app)
+  bot.command('myid', (ctx) => ctx.reply(`Your Telegram ID: <code>${ctx.from.id}</code>\nPut it in ADMIN_IDS to manage the menu in the app.`, { parse_mode: 'HTML' }));
+
   // Handy during setup: tells you the chat ID to put in BARISTA_CHAT_ID
   bot.command('chatid', (ctx) => {
     const t = ctx.msg.is_topic_message ? ctx.msg.message_thread_id : null;
@@ -164,6 +167,7 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
   bot.command('menu', async (ctx) => {
     if (!isBaristaChat(ctx)) return;
     const so = db.soldOut();
+    const menu = menuStore.getMenu();
     const list = menu.items.map((i) => `${so.has(i.id) ? '❌' : '✅'} ${esc(i.name)} — <code>${i.id}</code>`).join('\n');
     await ctx.reply(`${list}\n\n/soldout &lt;id&gt; or /restock &lt;id&gt;`, { parse_mode: 'HTML' });
   });
@@ -171,7 +175,7 @@ function createBot({ token, baristaChatId, baristaTopicId, webAppUrl, formatMone
     bot.command(cmd, async (ctx) => {
       if (!isBaristaChat(ctx)) return;
       const id = ctx.match.trim();
-      const item = menu.items.find((i) => i.id === id);
+      const item = menuStore.getMenu().items.find((i) => i.id === id);
       if (!item) return ctx.reply('Unknown item. Send /menu to see IDs.');
       db.setSoldOut(id, value);
       await ctx.reply(value ? `❌ ${item.name} marked sold out` : `✅ ${item.name} is back`);

@@ -90,7 +90,7 @@ function renderPay() {
         </div>
       </div>
       <div class="timer" id="timer"></div>
-      <div class="waiting" id="waiting"><img src="/logo-small.webp" alt="" />Waiting for your payment…</div>
+      <div class="waiting" id="waiting"><img src="/logo-mark.png" alt="" />Waiting for your payment…</div>
       <div class="pay-actions" id="actions">
         ${o.deeplink ? `<button class="btn primary" id="openBank">Open my banking app</button>` : ''}
         <button class="btn ${o.deeplink ? '' : 'primary'}" id="saveQr">Share or save QR</button>
@@ -126,7 +126,7 @@ function renderManualPay() {
     mainButton(null);
     $('#app').innerHTML = `
       <div class="checking">
-        <img src="/logo-small.webp" alt="" />
+        <img src="/logo-mark.png" alt="" />
         <h2>Checking your payment</h2>
         <p>The barista is confirming your payment in the bank app. This usually takes under a minute.</p>
         <div class="amt">${esc(o.total)}</div>

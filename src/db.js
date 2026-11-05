@@ -161,6 +161,7 @@ function expireManualOrders(graceMs) {
 }
 
 module.exports = {
+  raw: db, getSetting, setSetting,
   claimPaid, rejectPayment, extendDeadline, expireManualOrders, awaitingConfirmation,
   isOpen, setOpen, soldOut, setSoldOut,
   createOrder, setQR, getOrder, activeOrderForUser, pendingPayments,

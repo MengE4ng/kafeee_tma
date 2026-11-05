@@ -68,6 +68,14 @@ This protects against screenshots / accidental sharing, not against someone who 
 | `npm run secret:set` | Encrypt BOT_TOKEN, WEBAPP_URL, BARISTA_CHAT_ID in .env (`-- WEBAPP_URL` to change one value, `-- --all` for every line) |
 | `npm run secret:reveal` | Decrypt .env back to plain text |
 
+## Editing the menu (no code)
+
+Set `ADMIN_IDS` (your Telegram ID; send /myid to the bot to get it, several IDs separated by commas).
+Those accounts see **⚙ Manage menu** in the mini app: add/edit/delete drinks, prices, categories,
+option groups with extra prices, ordering, hide items, and sold-out switches. Changes are live immediately.
+The menu is stored in the database (`DB_PATH`), so on Render it needs the persistent disk.
+`src/menu.js` is only used once, to fill the menu on the very first start.
+
 ## Customize
 
 - Menu, prices, options: `src/menu.js`

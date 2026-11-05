@@ -1,6 +1,6 @@
 // Telegram setup, helpers, API, money and Telegram buttons
 const tg = window.Telegram?.WebApp;
-const BRAND = { paper: '#f4ead3', espresso: '#4b2e17', mustard: '#c9a12b', ink: '#1b1410' };
+const BRAND = { paper: '#FAF6F0', espresso: '#4A2C1A', gold: '#C9A227', ink: '#4A2C1A' };
 if (tg) {
   tg.ready(); tg.expand();
   try { tg.setHeaderColor(BRAND.paper); tg.setBackgroundColor(BRAND.paper); tg.setBottomBarColor?.(BRAND.paper); } catch {}
@@ -34,17 +34,6 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const state = { menu: null, cart: [], note: '', order: null, view: null, firstMenu: true };
 let pollTimer = null, tickTimer = null, stickObserver = null, sheetHideTimer = null;
-
-// Comic starburst, the same shape as the logo's background
-function burst(fill, points = 16, stroke = BRAND.ink) {
-  const pts = [];
-  for (let i = 0; i < points * 2; i++) {
-    const r = i % 2 ? 36 + (i % 4 === 1 ? 4 : 0) : 50;
-    const a = (Math.PI * i) / points;
-    pts.push((50 + r * Math.cos(a)).toFixed(1) + ',' + (50 + r * Math.sin(a)).toFixed(1));
-  }
-  return `<svg viewBox="-4 -4 108 108" aria-hidden="true"><polygon points="${pts.join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
-}
 
 // ---------- API ----------
 async function api(path, opts = {}) {

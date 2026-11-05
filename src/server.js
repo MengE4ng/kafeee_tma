@@ -7,7 +7,10 @@ const crypto = require('crypto');
 const { renderKhqrCard } = require('./khqrCard');
 
 const db = require('./db');
-const menu = require('./menu');
+const menuStore = require('./menuStore');
+// Telegram user IDs allowed to edit the menu in the app (comma separated). Send /myid to the bot to get yours.
+const ADMIN_IDS = String(process.env.ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const isAdmin = (user) => ADMIN_IDS.includes(String(user?.id));
 const shop = require('./shop');
 const { BakongKHQR } = require('bakong-khqr');
 const { generateKHQR, checkPaymentByMd5, generateDeepLink, addAmountToKhqr } = require('./khqr');
@@ -108,6 +111,7 @@ function publicOrder(o) {
 
 // Server-side pricing: never trust prices sent from the client.
 function priceLine(line) {
+  const menu = menuStore.getMenu();
   const item = menu.items.find((i) => i.id === line?.id);
   if (!item) throw new HttpError(400, 'An item in your cart is no longer on the menu');
   if (db.soldOut().has(item.id)) throw new HttpError(409, `${item.name} just sold out`);
@@ -119,6 +123,7 @@ function priceLine(line) {
   for (const g of item.options) {
     if (g === 'ice' && line.options?.temp === 'hot') continue; // no ice in a hot drink
     const group = menu.optionGroups[g];
+    if (!group) continue; // option was deleted from the menu
     const choice = group.choices.find((c) => c.id === (line.options?.[g] ?? group.default));
     if (!choice) throw new HttpError(400, `Invalid ${group.label.toLowerCase()}`);
     unit += toMinor(choice.add || 0);
@@ -201,8 +206,8 @@ app.get('/call', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Call ${safe}</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4ead3;font-family:-apple-system,Roboto,sans-serif;color:#1b1410}
-a{display:inline-block;padding:16px 28px;border:2.5px solid #1b1410;border-radius:14px;background:#c9a12b;color:#1b1410;font-size:20px;font-weight:800;text-decoration:none;box-shadow:4px 4px 0 #1b1410}
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FAF6F0;font-family:-apple-system,Roboto,sans-serif;color:#4A2C1A}
+a{display:inline-block;padding:16px 28px;border-radius:12px;background:#4A2C1A;color:#FAF6F0;font-size:18px;font-weight:600;letter-spacing:.06em;text-decoration:none}
 p{text-align:center}</style></head>
 <body><p>☕ Kafee<br><br><a href="tel:${tel}">📞 Call ${safe}</a></p>
 <script>location.href = 'tel:${tel}';</script></body></html>`);
@@ -216,9 +221,10 @@ app.get('/api/menu', (req, res) => {
     ...(() => { const s = shopState(); return { open: s.open, closedReason: s.reason, opensAt: s.opensAt || null, closesAt: s.closesAt || null }; })(),
     shop: publicShop(),
     currency: CURRENCY,
-    categories: menu.categories,
-    optionGroups: menu.optionGroups,
-    items: menu.items.map((i) => ({ ...i, soldOut: so.has(i.id) })),
+    ...(() => {
+      const menu = menuStore.getMenu();
+      return { categories: menu.categories, optionGroups: menu.optionGroups, items: menu.items.map((i) => ({ ...i, soldOut: so.has(i.id) })) };
+    })(),
   });
 });
 
@@ -278,6 +284,42 @@ app.post('/api/orders/:id/report', auth, wrap(async (req, res) => {
     throw new HttpError(503, 'Could not send. Please call or message us directly.');
   });
   res.json({ ok: true });
+}));
+
+// ---------- Menu admin (only for ADMIN_IDS) ----------
+app.get('/api/me', auth, (req, res) => res.json({ id: req.user.id, isAdmin: isAdmin(req.user) }));
+function adminOnly(req, res, next) {
+  if (!isAdmin(req.user)) return next(new HttpError(403, 'Only the shop owner can do this.'));
+  next();
+}
+const menuWrap = (fn) => wrap(async (req, res) => {
+  try { await fn(req, res); } catch (e) { if (e instanceof menuStore.MenuError) throw new HttpError(400, e.message); throw e; }
+});
+const adminMenu = () => {
+  const m = menuStore.getMenu({ includeHidden: true });
+  const so = db.soldOut();
+  return { ...m, items: m.items.map((i) => ({ ...i, soldOut: so.has(i.id) })) };
+};
+app.get('/api/admin/menu', auth, adminOnly, (req, res) => res.json(adminMenu()));
+app.post('/api/admin/items', auth, adminOnly, menuWrap(async (req, res) => {
+  const id = menuStore.saveItem(req.body || {});
+  if (typeof req.body?.soldOut === 'boolean') db.setSoldOut(id, req.body.soldOut);
+  res.json({ id, menu: adminMenu() });
+}));
+app.delete('/api/admin/items/:id', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.deleteItem(req.params.id); db.setSoldOut(req.params.id, false); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/options', auth, adminOnly, menuWrap(async (req, res) => {
+  const id = menuStore.saveOption(req.body || {}); res.json({ id, menu: adminMenu() });
+}));
+app.delete('/api/admin/options/:id', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.deleteOption(req.params.id); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/reorder', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.reorder(req.body || {}); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/soldout', auth, adminOnly, menuWrap(async (req, res) => {
+  db.setSoldOut(String(req.body?.id), Boolean(req.body?.soldOut)); res.json({ menu: adminMenu() });
 }));
 
 app.post('/api/orders/:id/regenerate', auth, wrap(async (req, res) => {
@@ -340,13 +382,13 @@ app.get('/share/:id', (req, res) => {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pay ${total} · KHQR</title>
 <style>
-  body{margin:0;min-height:100vh;background:#f4ead3;font-family:-apple-system,Roboto,'Noto Sans Khmer',sans-serif;color:#1b1410;
+  body{margin:0;min-height:100vh;background:#FAF6F0;font-family:-apple-system,Roboto,'Noto Sans Khmer',sans-serif;color:#4A2C1A;
     display:flex;flex-direction:column;align-items:center;padding:20px 16px 32px;box-sizing:border-box}
   img{width:100%;max-width:340px;border-radius:18px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
-  .btn{display:block;width:100%;max-width:340px;margin-top:14px;padding:15px;border:2.5px solid #1b1410;border-radius:14px;
-    font-size:18px;font-weight:800;text-align:center;text-decoration:none;color:#1b1410;box-shadow:4px 4px 0 #1b1410;box-sizing:border-box}
-  .primary{background:#c9a12b}.plain{background:#fff}
-  p{max-width:340px;text-align:center;color:#6e5a46;font-size:15px;line-height:1.4}
+  .btn{display:block;width:100%;max-width:340px;margin-top:12px;padding:15px;border:1px solid #4A2C1A;border-radius:12px;
+    font-size:14px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;text-align:center;text-decoration:none;color:#4A2C1A;box-sizing:border-box}
+  .primary{background:#4A2C1A;color:#FAF6F0}.plain{background:transparent}
+  p{max-width:340px;text-align:center;color:#8C7B6B;font-size:14px;line-height:1.45}
 </style></head><body>
 <img src="${img}" alt="KHQR ${total}">
 <button class="btn primary" id="share">📲 Share to my banking app</button>
