@@ -8,9 +8,8 @@ const { renderKhqrCard } = require('./khqrCard');
 
 const db = require('./db');
 const menuStore = require('./menuStore');
-// Telegram user IDs allowed to edit the menu in the app (comma separated). Send /myid to the bot to get yours.
-const ADMIN_IDS = String(process.env.ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
-const isAdmin = (user) => ADMIN_IDS.includes(String(user?.id));
+// Who may edit the menu in the app: ADMIN_IDS (IDs or @usernames) plus managers added with /addadmin
+const { isAdmin } = require('./admins');
 const shop = require('./shop');
 const { BakongKHQR } = require('bakong-khqr');
 const { generateKHQR, checkPaymentByMd5, generateDeepLink, addAmountToKhqr } = require('./khqr');
@@ -54,12 +53,15 @@ const fromMinor = (v) => v / FACTOR;
 const formatMoney = (minor, cur = CURRENCY) =>
   cur === 'USD' ? `$${(minor / 100).toFixed(2)}` : `${minor.toLocaleString('en-US')}៛`;
 
-const { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer } = createBot({
+const { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer, notifyClaimWithdrawn } = createBot({
   token: BOT_TOKEN, baristaChatId: BARISTA_CHAT_ID, baristaTopicId: process.env.BARISTA_TOPIC_ID, webAppUrl: WEBAPP_URL, formatMoney, manualTtlMs: QR_TTL_MS, shop: require('./shop'),
 });
 
 const app = express();
-app.use(express.json({ limit: '50kb' }));
+// small JSON everywhere, except "I've paid" which may carry a payment screenshot
+const smallJson = express.json({ limit: '50kb' }), proofJson = express.json({ limit: '6mb' });
+app.use((req, res, next) => (req.path.endsWith('/claim-paid') ? proofJson : smallJson)(req, res, next));
+const MAX_REJECTIONS = 3; // "Not received" claims per customer per 24h before ordering is paused
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -229,6 +231,9 @@ app.get('/api/menu', (req, res) => {
 });
 
 app.post('/api/orders', auth, wrap(async (req, res) => {
+  if (db.recentRejections(req.user.id) >= MAX_REJECTIONS) {
+    throw new HttpError(429, 'Online ordering is paused for your account because several payments couldn’t be confirmed. Please order at the counter.');
+  }
   const st = shopState();
   if (st.open === false) throw new HttpError(409, st.opensAt ? `We’re closed. We open ${st.opensAt}.` : 'The shop is closed right now');
   const lines = Array.isArray(req.body.items) ? req.body.items.slice(0, 30).map(priceLine) : [];
@@ -258,9 +263,21 @@ app.get('/api/orders/:id', auth, (req, res) => res.json(publicOrder(ownedOrder(r
 app.post('/api/orders/:id/claim-paid', auth, wrap(async (req, res) => {
   if (MODE !== 'manual') throw new HttpError(400, 'Not available');
   const order = ownedOrder(req);
+
+  // Proof of payment: a screenshot and/or the transaction ID from the bank receipt
+  const ref = String(req.body?.ref || '').trim().replace(/\s+/g, '').slice(0, 30);
+  let photo = null;
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.photo || ''));
+  if (m) {
+    photo = Buffer.from(m[2], 'base64');
+    if (photo.length > 4 * 1024 * 1024) throw new HttpError(413, 'That screenshot is too large. Please try another.');
+  }
+  if (ref && /^[A-Za-z0-9-]+$/.test(ref) === false) throw new HttpError(400, 'The transaction ID can only contain letters and numbers.');
+
   if (db.claimPaid(order.id)) {
+    db.setClaimProof(order.id, ref, null);
     try {
-      await notifyBaristaClaim(db.getOrder(order.id));
+      await notifyBaristaClaim(db.getOrder(order.id), { photo });
     } catch (e) {
       console.error('Notify barista failed:', e.message, '→ is the bot in the barista group and BARISTA_CHAT_ID correct?');
       db.setStatus(order.id, 'pending_payment'); // let the customer try again
@@ -268,6 +285,14 @@ app.post('/api/orders/:id/claim-paid', auth, wrap(async (req, res) => {
     }
   }
   res.json(publicOrder(db.getOrder(order.id)));
+}));
+
+// "I haven't paid yet": back to the QR after tapping "I've paid" by mistake
+app.post('/api/orders/:id/unclaim', auth, wrap(async (req, res) => {
+  const order = ownedOrder(req);
+  const wasPhoto = Boolean(order.claim_photo);
+  if (db.unclaim(order.id, QR_TTL_MS)) await notifyClaimWithdrawn(order, wasPhoto);
+  res.json(publicOrder(db.getOrder(order.id))); // if the barista already confirmed, this returns the paid order
 }));
 
 // Customer asks for help with an order → message in the barista group

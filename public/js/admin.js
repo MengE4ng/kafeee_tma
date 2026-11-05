@@ -95,9 +95,9 @@ async function moveCategory(index, dir) {
   try { await adminCall('/api/admin/reorder', 'POST', { categories: cats }); haptic('tap'); renderAdmin(); } catch (e) { toast(e.message); }
 }
 
-function editItem(id) {
+function editItem(id, draft) {
   const m = adminState.menu;
-  const it = id ? m.items.find((i) => i.id === id) : { name: '', category: m.categories[0] || 'Coffee', price: '', emoji: '☕', desc: '', options: [], hidden: false };
+  const it = draft || (id ? m.items.find((i) => i.id === id) : { name: '', category: m.categories[0] || 'Coffee', price: '', emoji: '☕', desc: '', options: [], hidden: false });
   const sel = new Set(it.options);
   openPanel(`
     <h2 class="panel-title">${id ? 'Edit drink' : 'New drink'}</h2>
@@ -111,17 +111,43 @@ function editItem(id) {
         <datalist id="catList">${m.categories.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
       <label class="field"><span>Description</span><input id="fDesc" maxlength="80" value="${esc(it.desc)}" placeholder="Short line under the name" /></label>
       <div class="field"><span>Options for this drink</span>
-        <div class="chips">${Object.entries(m.optionGroups).map(([g, o]) => `<button class="chip" data-g="${esc(g)}" aria-pressed="${sel.has(g)}">${esc(o.label)}</button>`).join('') || '<span class="desc">Create options in the Options tab first.</span>'}</div>
+        <div class="chips">${Object.entries(m.optionGroups).map(([g, o]) => `<button class="chip" data-g="${esc(g)}" aria-pressed="${sel.has(g)}">${esc(o.label)}</button>`).join('')}
+          <button class="chip chip-add" id="newOpt">+ New option</button></div>
+        <div class="opt-preview" id="optPreview"></div>
       </div>
       <label class="check"><input type="checkbox" id="fHidden" ${it.hidden ? 'checked' : ''} /> Hide from the menu</label>
       <div class="actions flush"><button class="btn primary" id="fSave">Save</button>
         ${id ? '<button class="btn ghost" id="fDelete">Delete drink</button>' : ''}</div>
     </div>
   `, (sheet, close) => {
-    $$('.chip', sheet).forEach((b) => b.onclick = () => {
-      const g = b.dataset.g; sel.has(g) ? sel.delete(g) : sel.add(g);
-      b.setAttribute('aria-pressed', sel.has(g)); haptic('tap');
+    // what the selected options look like, so the owner sees choices and extra prices right here
+    const preview = () => {
+      $('#optPreview', sheet).innerHTML = Object.keys(m.optionGroups).filter((g) => sel.has(g)).map((g) => {
+        const o = m.optionGroups[g];
+        return `<div><b>${esc(o.label)}</b> ${o.choices.map((c) => esc(c.label) + (c.add ? ` +${fmtPrice(c.add)}` : '')).join(' · ')}
+          <button class="link" data-edit-opt="${esc(g)}">Edit</button></div>`;
+      }).join('');
+      $$('[data-edit-opt]', sheet).forEach((b) => b.onclick = () => goToOption(b.dataset.editOpt));
+    };
+    const currentDraft = () => ({
+      name: $('#fName', sheet).value, price: $('#fPrice', sheet).value, emoji: $('#fEmoji', sheet).value,
+      category: $('#fCat', sheet).value, desc: $('#fDesc', sheet).value, options: [...sel], hidden: $('#fHidden', sheet).checked,
     });
+    // create or edit an option without leaving the drink: the form is kept and the new option is ticked
+    const goToOption = (optId) => {
+      const d = currentDraft();
+      close();
+      editOption(optId, {
+        onDone: (savedId) => { if (savedId && d.options.includes(savedId) === false) d.options.push(savedId); editItem(id, d); },
+        onBack: () => editItem(id, d),
+      });
+    };
+    $$('.chip[data-g]', sheet).forEach((b) => b.onclick = () => {
+      const g = b.dataset.g; sel.has(g) ? sel.delete(g) : sel.add(g);
+      b.setAttribute('aria-pressed', sel.has(g)); haptic('tap'); preview();
+    });
+    $('#newOpt', sheet).onclick = () => goToOption(null);
+    preview();
     $('#fSave', sheet).onclick = async () => {
       const body = {
         id, name: $('#fName', sheet).value, price: $('#fPrice', sheet).value.replace(',', '.'), emoji: $('#fEmoji', sheet).value,
@@ -140,7 +166,7 @@ function editItem(id) {
   });
 }
 
-function editOption(id) {
+function editOption(id, flow) {
   const m = adminState.menu;
   const g = id ? m.optionGroups[id] : { label: '', default: null, choices: [{ id: '', label: '', add: 0 }] };
   let choices = g.choices.map((c) => ({ ...c }));
@@ -164,19 +190,22 @@ function editOption(id) {
       <label class="field"><span>Option name</span><input id="oLabel" maxlength="24" value="${esc(g.label)}" placeholder="e.g. Milk" /></label>
       <div class="field"><span>Choices · extra price · ● default</span><div id="choices"></div>
         <button class="btn" id="addChoice" style="margin-top:8px">+ Add choice</button></div>
-      <div class="actions flush"><button class="btn primary" id="oSave">Save</button>
-        ${id ? '<button class="btn ghost" id="oDelete">Delete option</button>' : ''}</div>
+      <div class="actions flush"><button class="btn primary" id="oSave">${flow ? 'Save and use for this drink' : 'Save'}</button>
+        ${flow ? '<button class="btn" id="oBack">← Back to the drink</button>' : ''}
+        ${id && !flow ? '<button class="btn ghost" id="oDelete">Delete option</button>' : ''}</div>
     </div>
   `, (sheet, close) => {
     draw(sheet);
     $('#addChoice', sheet).onclick = () => { if (choices.length < 12) { choices.push({ id: '', label: '', add: 0 }); draw(sheet); } };
+    $('#oBack', sheet)?.addEventListener('click', () => { close(); flow.onBack(); });
     $('#oSave', sheet).onclick = async () => {
       choices.forEach((c, i) => { if (!c.id) c.id = `c${Date.now()}${i}`; });
       const checked = $('input[name="def"]:checked', sheet);
       if (checked) def = choices[checked.value]?.id;
       try {
-        await adminCall('/api/admin/options', 'POST', { id, label: $('#oLabel', sheet).value, default: def, choices: choices.map((c) => ({ id: c.id, label: c.label, add: Number(c.add) || 0 })) });
+        const res = await adminCall('/api/admin/options', 'POST', { id, label: $('#oLabel', sheet).value, default: def, choices: choices.map((c) => ({ id: c.id, label: c.label, add: Number(c.add) || 0 })) });
         haptic('success'); toast('Option saved'); close(); renderAdmin();
+        if (flow) flow.onDone(res.id);
       } catch (e) { haptic('error'); toast(e.message); }
     };
     $('#oDelete', sheet)?.addEventListener('click', async () => {

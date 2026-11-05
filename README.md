@@ -70,7 +70,8 @@ This protects against screenshots / accidental sharing, not against someone who 
 
 ## Editing the menu (no code)
 
-Set `ADMIN_IDS` (your Telegram ID; send /myid to the bot to get it, several IDs separated by commas).
+Set `ADMIN_IDS` to the owner's Telegram ID or @username (several separated by commas, e.g. `765537040,@sokha`).
+Owners can add more menu managers from Telegram, no redeploy needed: `/addadmin @username`, `/removeadmin @username`, `/admins`.
 Those accounts see **⚙ Manage menu** in the mini app: add/edit/delete drinks, prices, categories,
 option groups with extra prices, ordering, hide items, and sold-out switches. Changes are live immediately.
 The menu is stored in the database (`DB_PATH`), so on Render it needs the persistent disk.
