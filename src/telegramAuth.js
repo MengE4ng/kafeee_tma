@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 // Validates Telegram.WebApp.initData as described in
-// https://core.telegram.org/bots/webapps\#validating-data-received-via-the-mini-app
+// https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 // Returns the Telegram user object, or null if the data is forged/expired.
 
 // Split the query string ourselves: URLSearchParams turns "+" into a space,

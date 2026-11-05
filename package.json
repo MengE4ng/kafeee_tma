@@ -5,7 +5,10 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
-    "dev": "node --watch --disable-warning=ExperimentalWarning src/server.js"
+    "dev": "node --watch --disable-warning=ExperimentalWarning src/server.js",
+    "qr": "node --disable-warning=ExperimentalWarning scripts/make-qr.js",
+    "secret:set": "node --disable-warning=ExperimentalWarning scripts/obfuscate-token.js",
+    "secret:reveal": "node --disable-warning=ExperimentalWarning scripts/deobfuscate.js"
   },
   "engines": {
     "node": ">=22.13"

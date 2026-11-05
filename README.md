@@ -51,6 +51,32 @@ Set `PAYMENT_MODE` in `.env`:
 | `/menu` | List items with their IDs and stock status |
 | `/soldout latte`, `/restock latte` | Mark an item sold out / back |
 
+## Hiding the bot token in .env
+
+Run `node scripts/obfuscate-token.js` and paste the token when asked (it's hidden while you type).
+`.env` then contains `BOT_TOKEN_ENC=v1....` (unreadable) instead of `BOT_TOKEN=...`. The decryption key is
+stored outside the project in `~/.kafee_secret.key`. Run the script on each machine (Mac, server) separately.
+This protects against screenshots / accidental sharing, not against someone who has full access to the server.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm start` | Run the app |
+| `npm run dev` | Run the app and restart on file changes |
+| `npm run qr -- 2.25` | Make a KHQR with an amount from your merchant QR (`-- 2.25 card` for the full card image) |
+| `npm run secret:set` | Encrypt BOT_TOKEN, WEBAPP_URL, BARISTA_CHAT_ID in .env (`-- WEBAPP_URL` to change one value, `-- --all` for every line) |
+| `npm run secret:reveal` | Decrypt .env back to plain text |
+
+## Editing the menu (no code)
+
+Set `ADMIN_IDS` to the owner's Telegram ID or @username (several separated by commas, e.g. `765537040,@sokha`).
+Owners can add more menu managers from Telegram, no redeploy needed: `/addadmin @username`, `/removeadmin @username`, `/admins`.
+Those accounts see **⚙ Manage menu** in the mini app: add/edit/delete drinks, prices, categories,
+option groups with extra prices, ordering, hide items, and sold-out switches. Changes are live immediately.
+The menu is stored in the database (`DB_PATH`), so on Render it needs the persistent disk.
+`src/menu.js` is only used once, to fill the menu on the very first start.
+
 ## Customize
 
 - Menu, prices, options: `src/menu.js`
@@ -84,6 +110,16 @@ src/bot.js           Barista notifications, status buttons, commands
 src/db.js            SQLite storage (Node built-in, no compiling needed)
 src/telegramAuth.js  Verifies Telegram initData so orders can't be faked
 src/menu.js          Your menu
-public/index.html    The mini app (menu, cart, KHQR screen, pickup ticket)
+public/index.html    The mini app page (just the layout; loads the files below)
+public/css/styles.css  All styles
+public/js/core.js      Telegram setup, helpers, API calls, Telegram buttons
+public/js/cart.js      Cart helpers (prices, options, totals)
+public/js/router.js    Switching screens with transitions
+public/js/menu.js      Menu screen and drink sheet
+public/js/checkout.js  Cart screen and placing the order
+public/js/pay.js       Pay screens, cancel, payment polling
+public/js/status.js    Pickup ticket / order status
+public/js/shop.js      Find us card, contact buttons, Need help? panel
+public/js/main.js      Start-up
 public/logo.webp     Kafee logo (transparent background); logo-small.webp for icons
 ```

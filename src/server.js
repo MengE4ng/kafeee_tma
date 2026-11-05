@@ -7,10 +7,15 @@ const crypto = require('crypto');
 const { renderKhqrCard } = require('./khqrCard');
 
 const db = require('./db');
-const menu = require('./menu');
+const menuStore = require('./menuStore');
+// Who may edit the menu in the app: ADMIN_IDS (IDs or @usernames) plus managers added with /addadmin
+const { isAdmin } = require('./admins');
 const shop = require('./shop');
 const { BakongKHQR } = require('bakong-khqr');
-const { generateKHQR, checkPaymentByMd5, generateDeepLink } = require('./khqr');
+const { generateKHQR, checkPaymentByMd5, generateDeepLink, addAmountToKhqr } = require('./khqr');
+// Manual mode: put each order's amount into your merchant QR, so customers don't type it.
+// Set QR_WITH_AMOUNT=0 in .env to go back to the plain QR where customers type the amount.
+const QR_WITH_AMOUNT = process.env.QR_WITH_AMOUNT !== '0';
 const { validateInitData } = require('./telegramAuth');
 const { createBot } = require('./bot');
 
@@ -48,12 +53,15 @@ const fromMinor = (v) => v / FACTOR;
 const formatMoney = (minor, cur = CURRENCY) =>
   cur === 'USD' ? `$${(minor / 100).toFixed(2)}` : `${minor.toLocaleString('en-US')}៛`;
 
-const { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer } = createBot({
+const { bot, notifyBaristaNewOrder, notifyBaristaClaim, notifyBaristaReport, notifyCustomer, notifyClaimWithdrawn } = createBot({
   token: BOT_TOKEN, baristaChatId: BARISTA_CHAT_ID, baristaTopicId: process.env.BARISTA_TOPIC_ID, webAppUrl: WEBAPP_URL, formatMoney, manualTtlMs: QR_TTL_MS, shop: require('./shop'),
 });
 
 const app = express();
-app.use(express.json({ limit: '50kb' }));
+// small JSON everywhere, except "I've paid" which may carry a payment screenshot
+const smallJson = express.json({ limit: '50kb' }), proofJson = express.json({ limit: '6mb' });
+app.use((req, res, next) => (req.path.endsWith('/claim-paid') ? proofJson : smallJson)(req, res, next));
+const MAX_REJECTIONS = 3; // "Not received" claims per customer per 24h before ordering is paused
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -88,8 +96,12 @@ function publicOrder(o) {
     amount: fromMinor(o.total),
     currency: o.currency,
     mode: MODE,
-    qrUrl: MODE === 'manual' ? '/api/merchant-qr.png' : o.md5 ? `/api/orders/${o.id}/qr.png?k=${o.md5}` : null,
+    qrUrl: MODE === 'manual'
+      ? (o.qr ? `/api/orders/${o.id}/qr.png?k=${cardKey(o.id)}` : '/api/merchant-qr.png')
+      : o.md5 ? `/api/orders/${o.id}/qr.png?k=${o.md5}` : null,
+    amountInQr: MODE === 'manual' && Boolean(o.qr),
     cardUrl: `/api/orders/${o.id}/card.png?k=${cardKey(o.id)}`,
+    shareUrl: `/share/${o.id}?k=${cardKey(o.id)}`,
     qrCurrency: MODE === 'manual' ? merchantQR.currency : o.currency,
     rejectedCount: o.rejected_count || 0,
     deeplink: o.deeplink,
@@ -101,6 +113,7 @@ function publicOrder(o) {
 
 // Server-side pricing: never trust prices sent from the client.
 function priceLine(line) {
+  const menu = menuStore.getMenu();
   const item = menu.items.find((i) => i.id === line?.id);
   if (!item) throw new HttpError(400, 'An item in your cart is no longer on the menu');
   if (db.soldOut().has(item.id)) throw new HttpError(409, `${item.name} just sold out`);
@@ -112,6 +125,7 @@ function priceLine(line) {
   for (const g of item.options) {
     if (g === 'ice' && line.options?.temp === 'hot') continue; // no ice in a hot drink
     const group = menu.optionGroups[g];
+    if (!group) continue; // option was deleted from the menu
     const choice = group.choices.find((c) => c.id === (line.options?.[g] ?? group.default));
     if (!choice) throw new HttpError(400, `Invalid ${group.label.toLowerCase()}`);
     unit += toMinor(choice.add || 0);
@@ -121,7 +135,23 @@ function priceLine(line) {
 }
 
 async function attachNewQR(orderId) {
-  if (MODE === 'manual') { db.extendDeadline(orderId, QR_TTL_MS); return db.getOrder(orderId); }
+  if (MODE === 'manual') {
+    if (QR_WITH_AMOUNT) {
+      const o = db.getOrder(orderId);
+      // A QR with an amount must carry a timestamp to be valid KHQR. We give it 24h so it still
+      // works if the barista asks the customer to try again; the app's own pay timer still applies.
+      const qr = addAmountToKhqr(merchantQR.qr, fromMinor(o.total), { expiresAt: Date.now() + 24 * 3600 * 1000 });
+      if (BakongKHQR.verify(qr).isValid) {
+        db.setQR(orderId, { qr, md5: null, expiresAt: Date.now() + QR_TTL_MS, deeplink: null });
+      } else {
+        console.warn('Could not build a valid QR with amount; showing the plain merchant QR instead.');
+        db.extendDeadline(orderId, QR_TTL_MS);
+      }
+    } else {
+      db.extendDeadline(orderId, QR_TTL_MS);
+    }
+    return db.getOrder(orderId);
+  }
   const order = db.getOrder(orderId);
   const expiresAt = Date.now() + QR_TTL_MS;
   const { qr, md5 } = generateKHQR({
@@ -178,8 +208,8 @@ app.get('/call', (req, res) => {
   res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Call ${safe}</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4ead3;font-family:-apple-system,Roboto,sans-serif;color:#1b1410}
-a{display:inline-block;padding:16px 28px;border:2.5px solid #1b1410;border-radius:14px;background:#c9a12b;color:#1b1410;font-size:20px;font-weight:800;text-decoration:none;box-shadow:4px 4px 0 #1b1410}
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#FAF6F0;font-family:-apple-system,Roboto,sans-serif;color:#4A2C1A}
+a{display:inline-block;padding:16px 28px;border-radius:12px;background:#4A2C1A;color:#FAF6F0;font-size:18px;font-weight:600;letter-spacing:.06em;text-decoration:none}
 p{text-align:center}</style></head>
 <body><p>☕ Kafee<br><br><a href="tel:${tel}">📞 Call ${safe}</a></p>
 <script>location.href = 'tel:${tel}';</script></body></html>`);
@@ -193,13 +223,17 @@ app.get('/api/menu', (req, res) => {
     ...(() => { const s = shopState(); return { open: s.open, closedReason: s.reason, opensAt: s.opensAt || null, closesAt: s.closesAt || null }; })(),
     shop: publicShop(),
     currency: CURRENCY,
-    categories: menu.categories,
-    optionGroups: menu.optionGroups,
-    items: menu.items.map((i) => ({ ...i, soldOut: so.has(i.id) })),
+    ...(() => {
+      const menu = menuStore.getMenu();
+      return { categories: menu.categories, optionGroups: menu.optionGroups, items: menu.items.map((i) => ({ ...i, soldOut: so.has(i.id) })) };
+    })(),
   });
 });
 
 app.post('/api/orders', auth, wrap(async (req, res) => {
+  if (db.recentRejections(req.user.id) >= MAX_REJECTIONS) {
+    throw new HttpError(429, 'Online ordering is paused for your account because several payments couldn’t be confirmed. Please order at the counter.');
+  }
   const st = shopState();
   if (st.open === false) throw new HttpError(409, st.opensAt ? `We’re closed. We open ${st.opensAt}.` : 'The shop is closed right now');
   const lines = Array.isArray(req.body.items) ? req.body.items.slice(0, 30).map(priceLine) : [];
@@ -229,9 +263,21 @@ app.get('/api/orders/:id', auth, (req, res) => res.json(publicOrder(ownedOrder(r
 app.post('/api/orders/:id/claim-paid', auth, wrap(async (req, res) => {
   if (MODE !== 'manual') throw new HttpError(400, 'Not available');
   const order = ownedOrder(req);
+
+  // Proof of payment: a screenshot and/or the transaction ID from the bank receipt
+  const ref = String(req.body?.ref || '').trim().replace(/\s+/g, '').slice(0, 30);
+  let photo = null;
+  const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.photo || ''));
+  if (m) {
+    photo = Buffer.from(m[2], 'base64');
+    if (photo.length > 4 * 1024 * 1024) throw new HttpError(413, 'That screenshot is too large. Please try another.');
+  }
+  if (ref && /^[A-Za-z0-9-]+$/.test(ref) === false) throw new HttpError(400, 'The transaction ID can only contain letters and numbers.');
+
   if (db.claimPaid(order.id)) {
+    db.setClaimProof(order.id, ref, null);
     try {
-      await notifyBaristaClaim(db.getOrder(order.id));
+      await notifyBaristaClaim(db.getOrder(order.id), { photo });
     } catch (e) {
       console.error('Notify barista failed:', e.message, '→ is the bot in the barista group and BARISTA_CHAT_ID correct?');
       db.setStatus(order.id, 'pending_payment'); // let the customer try again
@@ -239,6 +285,14 @@ app.post('/api/orders/:id/claim-paid', auth, wrap(async (req, res) => {
     }
   }
   res.json(publicOrder(db.getOrder(order.id)));
+}));
+
+// "I haven't paid yet": back to the QR after tapping "I've paid" by mistake
+app.post('/api/orders/:id/unclaim', auth, wrap(async (req, res) => {
+  const order = ownedOrder(req);
+  const wasPhoto = Boolean(order.claim_photo);
+  if (db.unclaim(order.id, QR_TTL_MS)) await notifyClaimWithdrawn(order, wasPhoto);
+  res.json(publicOrder(db.getOrder(order.id))); // if the barista already confirmed, this returns the paid order
 }));
 
 // Customer asks for help with an order → message in the barista group
@@ -257,6 +311,42 @@ app.post('/api/orders/:id/report', auth, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- Menu admin (only for ADMIN_IDS) ----------
+app.get('/api/me', auth, (req, res) => res.json({ id: req.user.id, isAdmin: isAdmin(req.user) }));
+function adminOnly(req, res, next) {
+  if (!isAdmin(req.user)) return next(new HttpError(403, 'Only the shop owner can do this.'));
+  next();
+}
+const menuWrap = (fn) => wrap(async (req, res) => {
+  try { await fn(req, res); } catch (e) { if (e instanceof menuStore.MenuError) throw new HttpError(400, e.message); throw e; }
+});
+const adminMenu = () => {
+  const m = menuStore.getMenu({ includeHidden: true });
+  const so = db.soldOut();
+  return { ...m, items: m.items.map((i) => ({ ...i, soldOut: so.has(i.id) })) };
+};
+app.get('/api/admin/menu', auth, adminOnly, (req, res) => res.json(adminMenu()));
+app.post('/api/admin/items', auth, adminOnly, menuWrap(async (req, res) => {
+  const id = menuStore.saveItem(req.body || {});
+  if (typeof req.body?.soldOut === 'boolean') db.setSoldOut(id, req.body.soldOut);
+  res.json({ id, menu: adminMenu() });
+}));
+app.delete('/api/admin/items/:id', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.deleteItem(req.params.id); db.setSoldOut(req.params.id, false); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/options', auth, adminOnly, menuWrap(async (req, res) => {
+  const id = menuStore.saveOption(req.body || {}); res.json({ id, menu: adminMenu() });
+}));
+app.delete('/api/admin/options/:id', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.deleteOption(req.params.id); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/reorder', auth, adminOnly, menuWrap(async (req, res) => {
+  menuStore.reorder(req.body || {}); res.json({ menu: adminMenu() });
+}));
+app.post('/api/admin/soldout', auth, adminOnly, menuWrap(async (req, res) => {
+  db.setSoldOut(String(req.body?.id), Boolean(req.body?.soldOut)); res.json({ menu: adminMenu() });
+}));
+
 app.post('/api/orders/:id/regenerate', auth, wrap(async (req, res) => {
   const order = ownedOrder(req);
   if (!['pending_payment', 'expired'].includes(order.status)) throw new HttpError(409, 'This order is already paid');
@@ -266,7 +356,10 @@ app.post('/api/orders/:id/regenerate', auth, wrap(async (req, res) => {
 
 app.post('/api/orders/:id/cancel', auth, wrap(async (req, res) => {
   const order = ownedOrder(req);
-  if (!['pending_payment', 'expired', 'awaiting_confirmation'].includes(order.status)) throw new HttpError(409, 'Paid orders can’t be cancelled in the app. Please ask the barista.');
+  // Already cancelled (e.g. tapped twice, or cancelled on another device): just confirm it
+  if (order.status === 'cancelled') return res.json(publicOrder(order));
+  // Already paid: send the order back so the app can show the pickup number instead of an error
+  if (['pending_payment', 'expired', 'awaiting_confirmation'].includes(order.status) === false) return res.json(publicOrder(order));
   // Last check so we never cancel an order whose payment just landed
   if (MODE === 'manual' || !(await checkAndSettle(order))) db.setStatus(order.id, 'cancelled');
   res.json(publicOrder(db.getOrder(order.id)));
@@ -282,7 +375,7 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
   const order = db.getOrder(Number(req.params.id));
   if (!order || req.query.k !== cardKey(order.id)) throw new HttpError(404, 'Not found');
   const manual = MODE === 'manual';
-  const qr = manual ? merchantQR.qr : order.qr;
+  const qr = manual ? (order.qr || merchantQR.qr) : order.qr;
   if (!qr) throw new HttpError(404, 'Not found');
   const cacheKey = `${order.id}:${order.md5 || 'manual'}`;
   let png = cardCache.get(cacheKey);
@@ -292,7 +385,7 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
       merchant: manual ? merchantQR.name : (process.env.MERCHANT_NAME || SHOP_NAME),
       amount: fromMinor(order.total),
       currency: manual ? merchantQR.currency : order.currency,
-      fixedAmount: !manual,
+      fixedAmount: !manual || Boolean(order.qr),
     });
     cardCache.set(cacheKey, png);
     if (cardCache.size > 100) cardCache.delete(cardCache.keys().next().value);
@@ -302,10 +395,47 @@ app.get('/api/orders/:id/card.png', wrap(async (req, res) => {
   res.send(png);
 }));
 
+// Share page, opened in the phone's own browser (Chrome on Android), where the share sheet works.
+// Telegram's in-app window on Android can't open the share sheet, so the app sends customers here.
+app.get('/share/:id', (req, res) => {
+  const order = db.getOrder(Number(req.params.id));
+  if (!order || req.query.k !== cardKey(order.id)) return res.status(404).send('Not found');
+  const img = `/api/orders/${order.id}/card.png?k=${cardKey(order.id)}`;
+  const total = formatMoney(order.total, order.currency);
+  const file = `KHQR-kafee-${order.id}.png`;
+  res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pay ${total} · KHQR</title>
+<style>
+  body{margin:0;min-height:100vh;background:#FAF6F0;font-family:-apple-system,Roboto,'Noto Sans Khmer',sans-serif;color:#4A2C1A;
+    display:flex;flex-direction:column;align-items:center;padding:20px 16px 32px;box-sizing:border-box}
+  img{width:100%;max-width:340px;border-radius:18px;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+  .btn{display:block;width:100%;max-width:340px;margin-top:12px;padding:15px;border:1px solid #4A2C1A;border-radius:12px;
+    font-size:14px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;text-align:center;text-decoration:none;color:#4A2C1A;box-sizing:border-box}
+  .primary{background:#4A2C1A;color:#FAF6F0}.plain{background:transparent}
+  p{max-width:340px;text-align:center;color:#8C7B6B;font-size:14px;line-height:1.45}
+</style></head><body>
+<img src="${img}" alt="KHQR ${total}">
+<button class="btn primary" id="share">📲 Share to my banking app</button>
+<a class="btn plain" href="${img}" download="${file}">⬇️ Save image</a>
+<p>Pick your banking app in the share list. If it isn't there, tap “Save image”, then in your bank app choose Scan → Gallery.<br><br>After paying, go back to Telegram and tap “I’ve paid”.</p>
+<script>
+  let file = null;
+  fetch('${img}').then(r => r.blob()).then(b => { file = new File([b], '${file}', { type: 'image/png' }); });
+  document.getElementById('share').onclick = async () => {
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'KHQR payment', text: 'Pay ${total}' }); } catch (e) {}
+    } else {
+      location.href = '${img}';
+    }
+  };
+</script></body></html>`);
+});
+
 // Manual mode: your own merchant QR, rendered sharp from the KHQR string
 app.get('/api/merchant-qr.png', wrap(async (req, res) => {
   if (MODE !== 'manual') throw new HttpError(404, 'Not found');
-  const png = await QRCode.toBuffer(merchantQR.qr, { width: 720, margin: 2, errorCorrectionLevel: 'Q' });
+  const png = await QRCode.toBuffer(merchantQR.qr, { width: 720, margin: 0, errorCorrectionLevel: 'Q' });
   res.set('Content-Type', 'image/png');
   res.set('Cache-Control', 'public, max-age=86400');
   res.set('Content-Disposition', 'inline; filename="KHQR-kafee.png"');
@@ -316,8 +446,8 @@ app.get('/api/merchant-qr.png', wrap(async (req, res) => {
 // The md5 in the query acts as an unguessable key, since downloads can't send auth headers.
 app.get('/api/orders/:id/qr.png', wrap(async (req, res) => {
   const order = db.getOrder(Number(req.params.id));
-  if (!order || !order.qr || order.md5 !== req.query.k) throw new HttpError(404, 'Not found');
-  const png = await QRCode.toBuffer(order.qr, { width: 720, margin: 2, errorCorrectionLevel: 'Q' });
+  if (!order || !order.qr || (req.query.k !== order.md5 && req.query.k !== cardKey(order.id))) throw new HttpError(404, 'Not found');
+  const png = await QRCode.toBuffer(order.qr, { width: 720, margin: 0, errorCorrectionLevel: 'Q' });
   res.set('Content-Type', 'image/png');
   res.set('Content-Disposition', `inline; filename="KHQR-order-${order.id}.png"`);
   res.send(png);
