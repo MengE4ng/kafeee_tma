@@ -4,7 +4,7 @@ function renderCart() {
   backButton(() => go('menu'));
   if (!state.cart.length) {
     $('#app').innerHTML = `<h1 class="page-title">Your order</h1>
-      <div class="empty"><img src="/logo-small.webp" alt="" /><p>Your cup is empty. Pick something from the menu.</p>
+      <div class="empty"><img src="/logo-mark.png" alt="" /><p>Your cup is empty. Pick something from the menu.</p>
       <div class="actions"><button class="btn primary" id="toMenu">See the menu</button></div></div>`;
     $('#toMenu').onclick = () => go('menu');
     mainButton(null);

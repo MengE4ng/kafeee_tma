@@ -12,12 +12,14 @@ const readline = require('readline');
 const { encrypt, decrypt, KEY_FILE } = require('../src/secret');
 
 const ENV = path.join(__dirname, '..', '.env');
-const SECRETS = ['BOT_TOKEN', 'WEBAPP_URL', 'BARISTA_CHAT_ID', 'BARISTA_TOPIC_ID'];
+const SECRETS = ['BOT_TOKEN', 'WEBAPP_URL', 'BARISTA_CHAT_ID', 'BARISTA_TOPIC_ID', 'PAYWAY_MERCHANT_ID', 'PAYWAY_API_KEY'];
 const CHECKS = {
   BOT_TOKEN: [/^\d+:[\w-]{30,}$/, 'That does not look like a bot token.'],
   WEBAPP_URL: [/^https:\/\/\S+$/, 'The URL must start with https://'],
   BARISTA_CHAT_ID: [/^-?\d+$/, 'The chat ID must be a number like -1001234567890'],
   BARISTA_TOPIC_ID: [/^\d+$/, 'The topic ID must be a number like 12'],
+  PAYWAY_MERCHANT_ID: [/^[A-Za-z0-9_-]{3,40}$/, 'That does not look like a PayWay merchant ID.'],
+  PAYWAY_API_KEY: [/^[A-Za-z0-9]{16,128}$/, 'That does not look like a PayWay API key (the "Public Key" in the PayWay portal).'],
 };
 
 function ask(question, hidden) {
@@ -54,9 +56,9 @@ const unquote = (v) => v.trim().replace(/^(['"])(.*)\1$/, '$2');
     const hasEnc = lineRe(`${name}_ENC`).test(env);
     let value = plain ? unquote(plain[1].replace(/\s+#.*$/, '')) : ''; // drop "# comments" after values
 
-    const optional = name === 'BARISTA_TOPIC_ID';
+    const optional = ['BARISTA_TOPIC_ID', 'PAYWAY_MERCHANT_ID', 'PAYWAY_API_KEY'].includes(name);
     if (only || (!value && !hasEnc && optional === false)) {
-      const hidden = name === 'BOT_TOKEN';
+      const hidden = name === 'BOT_TOKEN' || name === 'PAYWAY_API_KEY';
       value = await ask(`New value for ${name}${hidden ? ' (hidden)' : ''}: `, hidden);
     }
     if (!value) { if (hasEnc) console.log(`${name}: already encrypted, kept.`); continue; }

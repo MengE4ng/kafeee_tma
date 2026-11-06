@@ -1,6 +1,6 @@
 // Switching between screens with transitions
 // ---------- Routing with transitions ----------
-const ORDER = { menu: 0, cart: 1, pay: 2, status: 3 };
+const ORDER = { menu: 0, admin: 1, cart: 1, pay: 2, status: 3 };
 function go(view, dir) {
   const from = state.view;
   dir = dir || (from == null ? 'up' : ORDER[view] >= ORDER[from] ? 'fwd' : 'back');
@@ -20,4 +20,4 @@ function go(view, dir) {
   };
   run();
 }
-function render() { ({ menu: renderMenu, cart: renderCart, pay: renderPay, status: renderStatus })[state.view](); }
+function render() { ({ menu: renderMenu, admin: renderAdmin, cart: renderCart, pay: renderPay, status: renderStatus })[state.view](); }

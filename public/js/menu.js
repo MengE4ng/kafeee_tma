@@ -7,13 +7,13 @@ function renderMenu() {
   let rowIndex = 0;
   $('#app').innerHTML = `
     <header class="hero">
-      <img src="/logo.webp" alt="Kafee" class="${intro ? 'intro' : ''}" id="logo" width="260" height="329" />
+      <img src="/logo.png" alt="Kafee" class="${intro ? 'intro' : ''}" id="logo" width="622" height="214" />
+      ${state.isAdmin ? '<div><button class="admin-link" id="openAdmin">⚙ Manage menu</button></div>' : ''}
       <div class="status-pill ${m.open ? '' : 'closed'}"><i></i>${m.open ? (m.closesAt ? `Open now · until ${m.closesAt}` : 'Open now · order ahead') : (m.opensAt ? `Closed · opens ${m.opensAt}` : 'Closed right now')}</div>
-      <div><span class="menu-label">MENU</span></div>
     </header>
     ${m.open ? '' : `<div class="closed-note">${m.opensAt ? `We’re closed now. Browse the menu, and order when we open ${esc(m.opensAt)}.` : 'You can look at the menu, but ordering opens when we do.'}</div>`}
     <nav class="bar" id="bar" role="tablist">
-      <img class="mini" src="/logo-small.webp" alt="" />
+      <img class="mini" src="/logo-mark.png" alt="" />
       ${m.categories.map((c, i) => `<button class="tab" role="tab" aria-selected="${i === 0}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
     </nav>
     <div class="board">
@@ -35,8 +35,8 @@ function renderMenu() {
   bindContact($('#visit') || document.createElement('div'));
 
   $$('[data-item]').forEach((b) => b.onclick = () => { haptic('light'); openSheet(b.dataset.item); });
+  $('#openAdmin')?.addEventListener('click', () => { adminState.menu = null; go('admin'); });
   const logo = $('#logo');
-  logo.onclick = () => { logo.classList.remove('intro', 'wiggle'); void logo.offsetWidth; logo.classList.add('wiggle'); haptic('medium'); };
 
   // Tabs scroll to category; highlight follows scroll
   $$('.tab').forEach((t) => t.onclick = () => {
@@ -72,11 +72,10 @@ function openSheet(id) {
   const sel = Object.fromEntries(item.options.map((g) => [g, groups[g].default]));
   let qty = 1;
   const sheet = $('#sheet'), scrim = $('#scrim');
-  const burstColor = catClass(item.category) === 'matcha' ? BRAND.mustard : '#7a4a26';
 
   sheet.innerHTML = `
     <div class="grabber"></div>
-    <div class="sheet-hero">${burst(burstColor)}<span class="big" aria-hidden="true">${item.emoji}</span></div>
+    <div class="sheet-hero"><span class="big" aria-hidden="true">${item.emoji}</span></div>
     <h2>${esc(item.name)}</h2>
     <div class="sub">${esc(item.desc)} · 20oz · ${fmt(minor(item.price))}</div>
     <div id="opts"></div>

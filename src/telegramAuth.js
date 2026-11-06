@@ -92,7 +92,7 @@ function validateInitData(initData, botToken, maxAgeSec = 24 * 3600, publicKeysH
   if (!authDate || Date.now() / 1000 - authDate > maxAgeSec) return fail('login data is older than 24 hours. Close the mini app and open it again.');
 
   try {
-    return JSON.parse(get('user'));
+    return { ...JSON.parse(get('user')), _authDate: authDate };
   } catch {
     return fail('login data has no user.');
   }

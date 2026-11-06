@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 `);
 
 // Columns added for manual payment mode (safe to run on an existing database)
-for (const col of ['claimed_at INTEGER', 'rejected_count INTEGER DEFAULT 0']) {
+for (const col of ['claimed_at INTEGER', 'rejected_count INTEGER DEFAULT 0', 'claim_ref TEXT', 'claim_photo TEXT']) {
   try { db.exec(`ALTER TABLE orders ADD COLUMN ${col}`); } catch { /* already exists */ }
 }
 
@@ -140,10 +140,31 @@ function claimPaid(id) {
 function rejectPayment(id, ttlMs) {
   const r = db.prepare(`
     UPDATE orders SET status = 'pending_payment', rejected_count = COALESCE(rejected_count, 0) + 1,
-      qr_expires_at = ?, updated_at = ?
+      claim_ref = NULL, claim_photo = NULL, qr_expires_at = ?, updated_at = ?
     WHERE id = ? AND status = 'awaiting_confirmation'
   `).run(now() + ttlMs, now(), id);
   return r.changes > 0;
+}
+// Proof the customer gave with "I've paid": transaction ID and/or the Telegram file id of their screenshot
+function setClaimProof(id, ref, photoId) {
+  db.prepare('UPDATE orders SET claim_ref = COALESCE(?, claim_ref), claim_photo = COALESCE(?, claim_photo) WHERE id = ?').run(ref || null, photoId || null, id);
+}
+// How many "I've paid" claims of this customer were marked "Not received" in the last 24 hours
+function recentRejections(userId) {
+  return db.prepare('SELECT COALESCE(SUM(rejected_count), 0) AS n FROM orders WHERE user_id = ? AND updated_at > ?')
+    .get(userId, now() - 24 * 3600 * 1000).n;
+}
+// Customer tapped "I've paid" by mistake and goes back to the QR (not counted as a failed payment)
+function unclaim(id, ttlMs) {
+  const r = db.prepare(`
+    UPDATE orders SET status = 'pending_payment', claim_ref = NULL, claim_photo = NULL, qr_expires_at = ?, updated_at = ?
+    WHERE id = ? AND status = 'awaiting_confirmation'
+  `).run(now() + ttlMs, now(), id);
+  return r.changes > 0;
+}
+function findOrderByPaymentRef(ref) {
+  const r = db.prepare('SELECT id FROM orders WHERE md5 = ?').get(ref);
+  return r ? getOrder(r.id) : null;
 }
 function extendDeadline(id, ttlMs) {
   db.prepare(`UPDATE orders SET status = 'pending_payment', qr_expires_at = ?, updated_at = ? WHERE id = ?`)
@@ -161,7 +182,8 @@ function expireManualOrders(graceMs) {
 }
 
 module.exports = {
-  claimPaid, rejectPayment, extendDeadline, expireManualOrders, awaitingConfirmation,
+  raw: db, getSetting, setSetting,
+  findOrderByPaymentRef, claimPaid, rejectPayment, unclaim, setClaimProof, recentRejections, extendDeadline, expireManualOrders, awaitingConfirmation,
   isOpen, setOpen, soldOut, setSoldOut,
   createOrder, setQR, getOrder, activeOrderForUser, pendingPayments,
   markPaid, setStatus, setBaristaMsg,

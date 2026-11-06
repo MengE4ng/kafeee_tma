@@ -3,6 +3,14 @@
 Customers order inside Telegram, pay with a KHQR code, and the barista group
 gets the order the moment Bakong confirms the money arrived.
 
+## ABA PayWay (automatic confirmation)
+
+Set `PAYMENT_MODE=payway`, `PAYWAY_MERCHANT_ID`, `PAYWAY_API_KEY` (PayWay "Public Key") and `PAYWAY_BASE`
+(sandbox: `https://checkout-sandbox.payway.com.kh`). Each order creates a PayWay payment with the exact total;
+the pay screen shows the KHQR and a **Pay with ABA Mobile** button. PayWay calls `/api/payway/callback` when paid,
+and the server double-checks with PayWay's check-transaction API before confirming. Unpaid orders are also polled.
+Check your setup with `npm run check:payway`. The RSA keys are not needed for this API.
+
 ## Payment modes
 
 Set `PAYMENT_MODE` in `.env`:
@@ -67,6 +75,24 @@ This protects against screenshots / accidental sharing, not against someone who 
 | `npm run qr -- 2.25` | Make a KHQR with an amount from your merchant QR (`-- 2.25 card` for the full card image) |
 | `npm run secret:set` | Encrypt BOT_TOKEN, WEBAPP_URL, BARISTA_CHAT_ID in .env (`-- WEBAPP_URL` to change one value, `-- --all` for every line) |
 | `npm run secret:reveal` | Decrypt .env back to plain text |
+
+## Editing the menu (no code)
+
+Set `ADMIN_IDS` to the owner's Telegram ID or @username (several separated by commas, e.g. `765537040,@sokha`).
+Owners can add more menu managers from Telegram, no redeploy needed: `/addadmin @username`, `/removeadmin @username`, `/admins`.
+Those accounts see **⚙ Manage menu** in the mini app: add/edit/delete drinks, prices, categories,
+option groups with extra prices, ordering, hide items, and sold-out switches. Changes are live immediately.
+The menu is stored in the database (`DB_PATH`), so on Render it needs the persistent disk.
+`src/menu.js` is only used once, to fill the menu on the very first start.
+
+## Security
+
+- Telegram login is verified on every request (signature + Telegram public key); `DEV_SKIP_AUTH` is ignored when `NODE_ENV=production`.
+- Prices and totals are always calculated on the server.
+- Menu changes: only owners (`ADMIN_IDS`) and managers (`/addadmin`), with a login less than 1 hour old; every change is posted to the barista group.
+- Payment/order buttons in the barista group: only owners, managers, or **admins of the group** can press them.
+- Rate limits on ordering, payment claims, help requests and menu changes; 3 "Not received" in 24h pauses online ordering for that customer.
+- Security headers (CSP, HSTS, nosniff, no referrer); secrets can be encrypted in `.env`; `.env` and the key file are kept at chmod 600.
 
 ## Customize
 

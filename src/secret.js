@@ -18,6 +18,18 @@ const fromGlyphs = (str) => Buffer.from(Array.from(str, (ch) => {
   return b;
 }));
 
+// Only your user account should be able to read the key and .env (chmod 600)
+function lockDown(file) {
+  try {
+    if (fs.existsSync(file) && (fs.statSync(file).mode & 0o077)) {
+      fs.chmodSync(file, 0o600);
+      console.warn(`[security] ${path.basename(file)} was readable by other users; permissions fixed (600).`);
+    }
+  } catch { /* not supported on this system */ }
+}
+lockDown(KEY_FILE);
+lockDown(path.join(__dirname, '..', '.env'));
+
 function readKey() {
   const hex = process.env.KAFEE_KEY || (fs.existsSync(KEY_FILE) ? fs.readFileSync(KEY_FILE, 'utf8').trim() : '');
   if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error(`Secret key not found. Expected it in ${KEY_FILE} (run: node scripts/obfuscate-token.js)`);

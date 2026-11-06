@@ -19,6 +19,51 @@ const QR_SKELETON = (() => {
 })();
 
 // QR image: shimmer skeleton while it loads, and a retry button if it fails (slow network / server waking up)
+// "I've paid": a quick slide-to-confirm (stops accidental taps) with an optional transaction ID.
+function openPaymentProof(o, money) {
+  openPanel(`
+    <h2 class="panel-title">Did you pay ${esc(money)}?</h2>
+    <p class="panel-sub">Slide to tell the barista you’ve paid to ${esc(o.merchant)}.</p>
+    <div class="form">
+      <div class="slide" id="slide" role="slider" aria-label="Slide to confirm payment" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+        <span class="slide-text">Slide to confirm I paid</span>
+        <span class="slide-knob" id="knob">→</span>
+      </div>
+      <details class="opt-ref">
+        <summary>Add transaction ID (optional, faster check)</summary>
+        <input id="proofRef" maxlength="30" autocomplete="off" inputmode="text" placeholder="From your bank receipt, e.g. 102938475" />
+      </details>
+      <p class="hint" style="margin:0">Payments that can’t be found may pause online ordering.</p>
+    </div>
+  `, (sheet, close) => {
+    const track = $('#slide', sheet), knob = $('#knob', sheet);
+    let startX = 0, dx = 0, dragging = false, done = false;
+    const max = () => track.clientWidth - knob.offsetWidth - 8;
+    const set = (x) => { dx = Math.max(0, Math.min(max(), x)); knob.style.transform = `translateX(${dx}px)`; track.style.setProperty('--p', dx / max()); track.setAttribute('aria-valuenow', Math.round((dx / max()) * 100)); };
+    const send = async () => {
+      done = true; track.classList.add('sending'); $('.slide-text', track).textContent = 'Sending…'; haptic('medium');
+      try {
+        state.order = await api(`/api/orders/${o.id}/claim-paid`, { method: 'POST', body: JSON.stringify({ ref: $('#proofRef', sheet).value }) });
+        close(); go('pay', 'up');
+      } catch (e) {
+        toast(e.message); done = false; track.classList.remove('sending'); $('.slide-text', track).textContent = 'Slide to confirm I paid';
+        knob.style.transition = 'transform .25s'; set(0); setTimeout(() => (knob.style.transition = ''), 260);
+      }
+    };
+    const end = () => {
+      if (!dragging || done) return;
+      dragging = false;
+      if (dx >= max() * 0.85) { set(max()); send(); }
+      else { knob.style.transition = 'transform .25s'; set(0); setTimeout(() => (knob.style.transition = ''), 260); }
+    };
+    knob.addEventListener('pointerdown', (e) => { if (done) return; dragging = true; startX = e.clientX - dx; knob.setPointerCapture(e.pointerId); haptic('tap'); });
+    knob.addEventListener('pointermove', (e) => { if (dragging) set(e.clientX - startX); });
+    knob.addEventListener('pointerup', end);
+    knob.addEventListener('pointercancel', end);
+    track.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && !done) { set(max()); send(); } });
+  });
+}
+
 function qrFailed(img) { img.parentNode.classList.add('failed'); }
 function qrRetry(btn) {
   const q = btn.parentNode, img = q.querySelector('img.code');
@@ -90,17 +135,24 @@ function renderPay() {
         </div>
       </div>
       <div class="timer" id="timer"></div>
-      <div class="waiting" id="waiting"><img src="/logo-small.webp" alt="" />Waiting for your payment…</div>
+      <div class="waiting" id="waiting"><img src="/logo-mark.png" alt="" />${o.mode === 'payway' ? 'Waiting for your payment… (confirmed automatically)' : 'Waiting for your payment…'}</div>
       <div class="pay-actions" id="actions">
-        ${o.deeplink ? `<button class="btn primary" id="openBank">Open my banking app</button>` : ''}
+        ${o.deeplink ? `<button class="btn primary" id="openBank">${o.mode === 'payway' ? 'Pay with ABA Mobile' : 'Open my banking app'}</button>` : ''}
         <button class="btn ${o.deeplink ? '' : 'primary'}" id="saveQr">Share or save QR</button>
         <button class="btn ghost" id="cancel">Cancel order</button>
       </div>
-      <p class="hint">Paying from this phone? Tap “Share or save QR” and pick your banking app, or save it and choose “scan from gallery”.</p>
+      <p class="hint">${o.mode === 'payway'
+        ? 'ABA users: tap “Pay with ABA Mobile”. Other banks: scan the KHQR. Your order is confirmed automatically.'
+        : 'Paying from this phone? Tap “Share or save QR” and pick your banking app, or save it and choose “scan from gallery”.'}</p>
       <button class="help-link" id="help">Paid but stuck? Get help</button>
     </div>`;
 
-  $('#openBank')?.addEventListener('click', () => tg ? tg.openLink(o.deeplink) : window.open(o.deeplink));
+  $('#openBank')?.addEventListener('click', () => {
+    haptic('light');
+    // https links open directly; app links (abamobilebank://) go through our https page, because Telegram can't open them
+    const url = /^https?:/i.test(o.deeplink) ? o.deeplink : location.origin + o.abaUrl;
+    tg ? tg.openLink(url) : window.open(url);
+  });
   setupSaveQr(o);
   $('#cancel').onclick = () => cancelOrder('Cancel this order? Don’t cancel if you’ve already paid.');
   $('#help').onclick = () => openSupport(o);
@@ -126,14 +178,25 @@ function renderManualPay() {
     mainButton(null);
     $('#app').innerHTML = `
       <div class="checking">
-        <img src="/logo-small.webp" alt="" />
+        <img src="/logo-mark.png" alt="" />
         <h2>Checking your payment</h2>
         <p>The barista is confirming your payment in the bank app. This usually takes under a minute.</p>
         <div class="amt">${esc(o.total)}</div>
         <button class="help-link" id="help">Taking too long? Get help</button>
-        <div class="actions"><button class="btn ghost" id="cancelWait">Cancel order (only if you didn’t pay)</button></div>
+        <div class="actions">
+          <button class="btn" id="notPaid">← I haven’t paid yet</button>
+          <button class="btn ghost" id="cancelWait">Cancel order (only if you didn’t pay)</button>
+        </div>
       </div>`;
     $('#cancelWait').onclick = () => cancelOrder('Cancel this order? Only cancel if you did NOT pay.');
+    $('#notPaid').onclick = async () => {
+      try {
+        state.order = await api(`/api/orders/${o.id}/unclaim`, { method: 'POST' });
+        haptic('light');
+        if (state.order.status === 'pending_payment') { toast('Pay with the QR, then tap “I’ve paid”.'); go('pay', 'back'); }
+        else go('status', 'up'); // the barista had already confirmed it
+      } catch (e) { toast(e.message); }
+    };
     $('#help').onclick = () => openSupport(o);
     pollTimer = setInterval(pollOrder, 3000);
     return;
@@ -178,19 +241,7 @@ function renderManualPay() {
     </div>`;
   $('#help').onclick = () => openSupport(o);
 
-  const claim = async () => {
-    const ok = await new Promise((r) => tg?.showConfirm
-      ? tg.showConfirm(`Did you pay ${money} to ${o.merchant}?`, r)
-      : r(confirm(`Did you pay ${money}?`)));
-    if (!ok) return;
-    tg?.MainButton.showProgress();
-    try {
-      state.order = await api(`/api/orders/${o.id}/claim-paid`, { method: 'POST' });
-      haptic('medium');
-      go('pay', 'up');
-    } catch (e) { toast(e.message); }
-    finally { tg?.MainButton.hideProgress(); }
-  };
+  const claim = () => openPaymentProof(o, money);
   mainButton(`I’VE PAID ${money}`, claim);
   $('#paidBtn')?.addEventListener('click', claim);
   if ($('#copyAmt')) $('#copyAmt').onclick = async () => {
@@ -228,10 +279,7 @@ function showExpired() {
   const manual = state.order.mode === 'manual';
   if (manual) mainButton(null);
   $('#actions').innerHTML = `${manual ? '<button class="btn dark" id="paidLate">I already paid</button>' : ''}<button class="btn primary" id="regen">${manual ? 'I still want to order' : 'Get a new QR'}</button><button class="btn ghost" id="cancel2">Cancel order</button>`;
-  $('#paidLate')?.addEventListener('click', async () => {
-    try { state.order = await api(`/api/orders/${state.order.id}/claim-paid`, { method: 'POST' }); go('pay', 'up'); }
-    catch (e) { toast(e.message); }
-  });
+  $('#paidLate')?.addEventListener('click', () => openPaymentProof(state.order, state.order.total));
   $('#regen').onclick = async () => {
     try { state.order = await api(`/api/orders/${state.order.id}/regenerate`, { method: 'POST' }); haptic('light'); go(state.order.status === 'pending_payment' ? 'pay' : 'status', 'up'); }
     catch (e) { toast(e.message); }
